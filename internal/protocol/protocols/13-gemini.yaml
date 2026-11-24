@@ -1,0 +1,25 @@
+# Gemini (AI Studio /v1beta and /v1, Vertex AI publishers/google) and the
+# Gemini CLI / Code Assist internal endpoints.
+id: gemini
+extends: [_gemini]
+match:
+  - method: POST
+    path_regex: /models/[^:]+:(generateContent|streamGenerateContent|countTokens|embedContent|batchEmbedContents|batchGenerateContent)
+request:
+  instruction:
+    strategy: gemini
+    path: systemInstruction|system_instruction
+---
+id: gemini-cli
+extends: [_gemini]
+match:
+  - method: POST
+    path_regex: /v1internal:(generateContent|streamGenerateContent|countTokens)
+request:
+  frozen:
+    - "project"
+    - "user_prompt_id"
+    - "request.session_id"
+  instruction:
+    strategy: gemini
+    path: request.systemInstruction|request.system_instruction

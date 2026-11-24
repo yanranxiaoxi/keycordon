@@ -1,0 +1,32 @@
+# Container defaults. Override any of these by mounting your own file at
+# /etc/keycordon/config.yaml, or by passing the serve flags:
+#   keycordon serve -config /etc/keycordon/config.yaml -upstream http://cpa:8317
+#
+# Everything else keeps the built-in defaults (see keycordon.example.yaml).
+
+# Must not be 127.0.0.1 inside a container, or nothing outside can reach it.
+listen: 0.0.0.0:8318
+
+# CLIProxyAPI or any OpenAI/Anthropic/Gemini-compatible endpoint. Point this at
+# another container (`http://cpa:8317`) or at the host
+# (`http://host.docker.internal:8317`, plus --add-host on Linux).
+upstream: http://127.0.0.1:8317
+
+mode: enforce
+
+vault:
+  # Persisted in the /var/lib/keycordon volume, so placeholders survive a
+  # container restart. Set master_key_scope: env with KEYCORDON_MASTER_KEY to
+  # keep the key out of the volume instead.
+  master_key_scope: file
+  master_key_file: /var/lib/keycordon/master.key
+
+caller:
+  # Listening on 0.0.0.0 makes every client's credential the vault partition.
+  # Keep this true: a request with no credential gets 401 instead of sharing
+  # one vault with everyone.
+  require_on_non_loopback: true
+
+log:
+  level: info
+  format: json

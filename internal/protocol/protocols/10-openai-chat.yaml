@@ -1,0 +1,41 @@
+# OpenAI Chat Completions and compatible services (DeepSeek, Zhipu, Moonshot,
+# Qwen, OpenRouter, vLLM, Ollama /v1, ...).
+id: openai-chat
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /chat/completions
+request:
+  payload:
+    - "tools.[].function.parameters"
+    - "functions.[].parameters"
+    - "response_format.json_schema.schema"
+  known_only:
+    - "messages.[].reasoning_content"
+    - "messages.[].reasoning"
+    - "messages.[].reasoning_details"
+    - "messages.[].thinking"
+  instruction:
+    strategy: openai_messages
+    path: messages
+response:
+  skip:
+    - "**.reasoning_content"
+    - "**.reasoning"
+    - "**.reasoning_details"
+    - "**.thinking"
+  deltas:
+    - field: "choices.[].delta.content"
+      kind: text
+    - field: "choices.[].delta.refusal"
+      kind: text
+    - field: "choices.[].delta.tool_calls.[].function.arguments"
+      kind: json_fragment
+    - field: "choices.[].delta.function_call.arguments"
+      kind: json_fragment
+    - field: "choices.[].delta.reasoning_content"
+      kind: reasoning
+    - field: "choices.[].delta.reasoning"
+      kind: reasoning
+    - field: "choices.[].delta.thinking"
+      kind: reasoning

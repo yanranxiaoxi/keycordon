@@ -1,0 +1,62 @@
+# Legacy completions (after openai-chat so /chat/completions wins).
+id: openai-completions
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /completions
+response:
+  deltas:
+    - field: "choices.[].text"
+      kind: text
+---
+# Gemini Interactions style endpoint exposed by CLIProxyAPI. The body format
+# is not pinned down yet, so every string is scanned and no notice is added.
+id: interactions
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /interactions
+---
+# Ollama native API (NDJSON streaming).
+id: ollama-chat
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /api/chat
+request:
+  frozen:
+    - "messages.[].images"
+    - "messages.[].thinking"
+  instruction:
+    strategy: openai_messages
+    path: messages
+response:
+  ndjson_stream: true
+  skip:
+    - "**.thinking"
+  deltas:
+    - field: "message.content"
+      kind: text
+    - field: "message.thinking"
+      kind: reasoning
+    - field: "message.tool_calls.[].function.arguments"
+      kind: json_fragment
+---
+id: ollama-generate
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /api/generate
+request:
+  frozen:
+    - "images"
+    - "context"
+response:
+  ndjson_stream: true
+  skip:
+    - "thinking"
+  deltas:
+    - field: "response"
+      kind: text
+    - field: "thinking"
+      kind: reasoning

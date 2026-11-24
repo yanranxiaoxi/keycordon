@@ -1,0 +1,29 @@
+# WebSocket and realtime transports cannot be filtered yet. They are listed
+# explicitly so they are rejected (or passed through, per
+# protocols.unsupported_ai_policy) instead of silently bypassing the filter.
+id: websocket-ai
+filter: unsupported
+match:
+  - upgrade: true
+    path_suffix: /responses
+  - upgrade: true
+    path_regex: /realtime(/[^/]*)?
+  - upgrade: true
+    path_regex: BidiGenerateContent[^/]*
+  - upgrade: true
+    path_suffix: /live
+  - upgrade: true
+    path_suffix: /chat/completions
+  - upgrade: true
+    path_suffix: /messages
+  # CLIProxyAPI's WebSocket tunnel.
+  - upgrade: true
+    path_suffix: /tunnel
+---
+id: openai-realtime-http
+filter: unsupported
+match:
+  - method: POST
+    path_regex: /realtime(/.*)?
+  - method: GET
+    path_regex: /realtime/translations

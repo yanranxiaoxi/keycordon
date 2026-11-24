@@ -1,0 +1,112 @@
+# Shared definitions. Paths use internal/pathpat syntax:
+#   key  *  []  **  ?k=v  ?k!=v  ?k
+# A selector naming an object or array also covers everything inside it.
+id: _common
+abstract: true
+request:
+  scan: all_strings
+  frozen:
+    # Protocol identifiers. Changing them breaks call/result pairing.
+    - "**.id"
+    - "**.call_id"
+    - "**.tool_call_id"
+    - "**.tool_use_id"
+    - "**.item_id"
+    - "**.previous_response_id"
+    - "**.response_id"
+    - "**.conversation_id"
+    # Any *_id / *_ids / *Id / *Ids: the upstream matches one side against
+    # the other, and masking one side only breaks the pairing (design 4.2).
+    - "**.*_id"
+    - "**.*_ids"
+    - "**.*Id"
+    - "**.*Ids"
+    - "model"
+    - "**.role"
+    - "**.type"
+    - "**.object"
+    - "**.name"
+    - "**.status"
+    - "**.mimeType"
+    - "**.mime_type"
+    - "**.media_type"
+    # Reasoning effort and stop reasons are enums the upstream validates.
+    - "**.reasoning_effort"
+    - "**.effort"
+    - "**.stop_reason"
+    - "**.finish_reason"
+    - "**.event"
+    # Tool namespaces: Codex checks ^[a-zA-Z0-9_-]+$ and rejects a masked
+    # word with 400 (design 4.2).
+    - "**.namespace"
+    - "**.server_label"
+    - "**.server_name"
+    # Values that providers fold into cache routing keys.
+    - "user"
+    - "prompt_cache_key"
+    - "safety_identifier"
+    - "metadata.user_id"
+    - "**.cache_control"
+    # Signed or encrypted content: any change makes the upstream reject it.
+    - "**.signature"
+    - "**.thoughtSignature"
+    - "**.thought_signature"
+    - "**.encrypted_content"
+    - "**.?type=redacted_thinking.data"
+    - "**.?type=thinking.thinking"
+    # Binary payloads (data: URIs are skipped wherever they appear).
+    - "**.inlineData.data"
+    - "**.inline_data.data"
+    - "**.input_audio.data"
+    - "**.file_data"
+    - "**.source.?type=base64.data"
+response:
+  restore: all_strings
+  skip:
+    - "**.signature"
+    - "**.thoughtSignature"
+    - "**.thought_signature"
+    - "**.encrypted_content"
+    - "**.?type=thinking"
+    - "**.?type=redacted_thinking"
+    - "**.?thought=true.text"
+---
+# Endpoints whose user content sits in a few prompt-like fields and never
+# becomes conversation history (see design 4.7).
+id: _prompt_only
+abstract: true
+extends: [_common]
+request:
+  scan: fields
+---
+id: _gemini
+abstract: true
+extends: [_common]
+request:
+  frozen:
+    - "**.?thought=true.text"
+    - "**.fileData.fileUri"
+    - "**.file_data.file_uri"
+    - "cachedContent"
+    - "cached_content"
+  payload:
+    - "**.functionCall.args"
+    - "**.function_call.args"
+    - "**.functionResponse.response"
+    - "**.function_response.response"
+    - "**.functionDeclarations.[].parameters"
+    - "**.function_declarations.[].parameters"
+    - "**.functionDeclarations.[].parametersJsonSchema"
+    - "**.responseSchema"
+    - "**.response_schema"
+response:
+  json_array_stream: true
+  deltas:
+    - field: "candidates.[].content.parts.[].?thought=true.text"
+      kind: reasoning
+    - field: "candidates.[].content.parts.[].text"
+      kind: text
+    - field: "response.candidates.[].content.parts.[].?thought=true.text"
+      kind: reasoning
+    - field: "response.candidates.[].content.parts.[].text"
+      kind: text

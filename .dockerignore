@@ -1,0 +1,14 @@
+.git
+.gitlab-ci.yml
+.gitignore
+.vscode
+docs
+scripts
+# A local build artifact or a runtime config must never enter the image.
+/keycordon
+/dist
+*.test
+*.out
+*.log
+/keycordon.yaml
+/master.key

@@ -1,0 +1,11 @@
+# Binaries and build output
+/keycordon
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local runtime state
+/keycordon.yaml
+/master.key
+*.log

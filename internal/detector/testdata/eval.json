@@ -1,0 +1,285 @@
+{
+  "description": "Masking evaluation corpus. Each case is a text an agent sends, with the values that must be masked (want) and those that must go as written (keep). Nothing here is anyone's data: every value is made up. A case may have both, and a value in neither list is not scored.",
+  "cases": [
+    {
+      "id": "env-dump",
+      "text": "OPENAI_API_KEY=sk-proj-AbCdEf1234567890GhIjKlMnOpQrStUvWx\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nLOG_LEVEL=debug\nTOKEN_TTL=3600",
+      "want": [
+        "sk-proj-AbCdEf1234567890GhIjKlMnOpQrStUvWx",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      ],
+      "keep": [
+        "debug",
+        "3600"
+      ]
+    },
+    {
+      "id": "github-token",
+      "text": "git clone https://ghp_NqVwYS81VP7Hb1DX8pQ2mZ7xL4kR9tWcB3vE@github.com/acme/private.git",
+      "want": [
+        "ghp_NqVwYS81VP7Hb1DX8pQ2mZ7xL4kR9tWcB3vE"
+      ],
+      "keep": []
+    },
+    {
+      "id": "redis-anon-user",
+      "text": "REDIS_URL=redis://:S3cr3tPassw0rd@cache.internal:6379/0",
+      "want": [
+        "S3cr3tPassw0rd"
+      ],
+      "keep": []
+    },
+    {
+      "id": "postgres-uri",
+      "text": "DB=postgres://app:hunter2-but-longer@db.prod.internal:5432/app",
+      "want": [
+        "hunter2-but-longer"
+      ],
+      "keep": [
+        "app",
+        "db.prod.internal"
+      ]
+    },
+    {
+      "id": "bare-random",
+      "text": "use Zx8Kq2Lm9Pw4Rt7Yv3Bn6Hs1Jd5Gf0Ac please",
+      "want": [
+        "Zx8Kq2Lm9Pw4Rt7Yv3Bn6Hs1Jd5Gf0Ac"
+      ],
+      "keep": []
+    },
+    {
+      "id": "cjk-prose",
+      "text": "数据库密码是 hunter2-but-longer，请记住",
+      "want": [
+        "hunter2-but-longer"
+      ],
+      "keep": []
+    },
+    {
+      "id": "cjk-alphabetic",
+      "text": "数据库密码是 correcthorsebattery",
+      "want": [
+        "correcthorsebattery"
+      ],
+      "keep": []
+    },
+    {
+      "id": "english-prose",
+      "text": "the password is pa55word-9x",
+      "want": [
+        "pa55word-9x"
+      ],
+      "keep": []
+    },
+    {
+      "id": "private-key",
+      "text": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+      "want": [
+        "b3BlbnNzaC1rZXktdjEAAAAA"
+      ],
+      "keep": []
+    },
+    {
+      "id": "aws-access-key",
+      "text": "AKIAQX2LMNB7RT5KJW3P",
+      "want": [
+        "AKIAQX2LMNB7RT5KJW3P"
+      ],
+      "keep": []
+    },
+    {
+      "id": "git-sha",
+      "text": "commit 3f2a9c1b8d7e6f5a4b3c2d1e0f9a8b7c9d8e7f6a",
+      "want": [],
+      "keep": [
+        "3f2a9c1b8d7e6f5a4b3c2d1e0f9a8b7c9d8e7f6a"
+      ]
+    },
+    {
+      "id": "uuid",
+      "text": "id 550e8400-e29b-41d4-a716-446655440000 ok",
+      "want": [],
+      "keep": [
+        "550e8400-e29b-41d4-a716-446655440000"
+      ]
+    },
+    {
+      "id": "model-name",
+      "text": "model claude-sonnet-4-5-20250929 used",
+      "want": [],
+      "keep": [
+        "claude-sonnet-4-5-20250929"
+      ]
+    },
+    {
+      "id": "identifier",
+      "text": "const VAULT_KEY_SOURCE_DEFAULT2 here",
+      "want": [],
+      "keep": [
+        "VAULT_KEY_SOURCE_DEFAULT2"
+      ]
+    },
+    {
+      "id": "tool-call-id",
+      "text": "call_8fKq2Lm9Pw4Rt7Yv3Bn6Hs",
+      "want": [],
+      "keep": [
+        "call_8fKq2Lm9Pw4Rt7Yv3Bn6Hs"
+      ]
+    },
+    {
+      "id": "go-sum-hash",
+      "text": "github.com/rrethy/ahocorasick v1.0.0 h1:YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E=",
+      "want": [],
+      "keep": [
+        "YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E="
+      ]
+    },
+    {
+      "id": "email",
+      "text": "mail john.doe2024@example-mail.com now",
+      "want": [],
+      "keep": [
+        "john.doe2024@example-mail.com"
+      ]
+    },
+    {
+      "id": "path-value",
+      "text": "PRIVATE_KEY_PATH=~/.ssh/id_ed25519",
+      "want": [],
+      "keep": [
+        "~/.ssh/id_ed25519"
+      ]
+    },
+    {
+      "id": "code-identifier",
+      "text": "access_token = get_access_token_v2",
+      "want": [],
+      "keep": [
+        "get_access_token_v2"
+      ]
+    },
+    {
+      "id": "code-chain",
+      "text": "secret: env.SECRET_V2",
+      "want": [],
+      "keep": [
+        "env.SECRET_V2"
+      ]
+    },
+    {
+      "id": "package-version",
+      "text": "jsonwebtoken = \"9.2.0-beta1\"",
+      "want": [],
+      "keep": [
+        "9.2.0-beta1"
+      ]
+    },
+    {
+      "id": "tokenizer-version",
+      "text": "tokenizer = \"2.4.0-beta02\"",
+      "want": [],
+      "keep": [
+        "2.4.0-beta02"
+      ]
+    },
+    {
+      "id": "next-field",
+      "text": "UI_PASSWORD= UI_ADDR=127.0.0.1:39117 ./syncer serve",
+      "want": [],
+      "keep": [
+        "UI_ADDR=127.0.0.1:39117"
+      ]
+    },
+    {
+      "id": "expiry-timestamp",
+      "text": "\"access_token_expires_at\": \"2026-08-30T11:44:31.312645+08:00\"",
+      "want": [],
+      "keep": [
+        "2026-08-30T11:44:31.312645+08:00"
+      ]
+    },
+    {
+      "id": "line-reference",
+      "text": "internal/auth/token.go:L643-669",
+      "want": [],
+      "keep": [
+        "L643-669"
+      ]
+    },
+    {
+      "id": "max-tokens",
+      "text": "{\"max_tokens\": 4096, \"token_count\": 1234}",
+      "want": [],
+      "keep": [
+        "4096",
+        "1234"
+      ]
+    },
+    {
+      "id": "cjk-schema-word",
+      "text": "密码是必需的字段",
+      "want": [],
+      "keep": [
+        "必需的字段"
+      ]
+    },
+    {
+      "id": "cjk-numeric-count",
+      "text": "密码是 12345678 位数",
+      "want": [],
+      "keep": [
+        "12345678"
+      ]
+    },
+    {
+      "id": "english-prose-fp",
+      "text": "the password is required for this account",
+      "want": [],
+      "keep": [
+        "required"
+      ]
+    },
+    {
+      "id": "japanese-label",
+      "text": "パスワード: Zq7xLm2Vp9r",
+      "want": [
+        "Zq7xLm2Vp9r"
+      ],
+      "keep": []
+    },
+    {
+      "id": "korean-label",
+      "text": "비밀번호: hunter2butlonger",
+      "want": [
+        "hunter2butlonger"
+      ],
+      "keep": []
+    },
+    {
+      "id": "traditional-chinese",
+      "text": "密碼：Zq7xLm2Vp9r",
+      "want": [
+        "Zq7xLm2Vp9r"
+      ],
+      "keep": []
+    },
+    {
+      "id": "mixed-symbols",
+      "text": "the value \"aB3$k9_Qz-7mP+x2Lw/Rt4!\" here",
+      "want": [
+        "aB3$k9_Qz-7mP+x2Lw/Rt4!"
+      ],
+      "keep": []
+    },
+    {
+      "id": "base64-in-json",
+      "text": "{\"password\":\"cGFzc3dvcmQ9aHVudGVyMi1idXQtbG9uZ2Vy\"}",
+      "want": [
+        "password\":\"cGFzc3dvcmQ9aHVudGVyMi1idXQtbG9uZ2Vy"
+      ],
+      "keep": []
+    }
+  ]
+}

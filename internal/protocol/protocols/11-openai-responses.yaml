@@ -1,0 +1,61 @@
+# OpenAI Responses API, Codex CLI (API key and ChatGPT login) and the
+# CLIProxyAPI compact endpoint.
+id: openai-responses
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /responses
+  - method: POST
+    path_suffix: /responses/compact
+request:
+  payload:
+    - "tools.[].parameters"
+    - "tools.[].format"
+    - "text.format.schema"
+  known_only:
+    - "**.?type=reasoning.summary"
+    - "**.?type=reasoning.content"
+  instruction:
+    # A developer message at the start of "input" instead of editing
+    # "instructions": the ChatGPT Codex backend validates "instructions".
+    strategy: responses_input
+    path: input
+response:
+  skip:
+    - "**.?type=reasoning"
+  stream_keys: [item_id, output_index, content_index]
+  deltas:
+    - event: response.output_text.delta
+      field: delta
+      kind: text
+    - event: response.refusal.delta
+      field: delta
+      kind: text
+    - event: response.function_call_arguments.delta
+      field: delta
+      kind: json_fragment
+    - event: response.mcp_call_arguments.delta
+      field: delta
+      kind: json_fragment
+    - event: response.custom_tool_call_input.delta
+      field: delta
+      kind: text
+    - event: response.code_interpreter_call_code.delta
+      field: delta
+      kind: text
+    - event: response.reasoning_summary_text.delta
+      field: delta
+      kind: reasoning
+    - event: response.reasoning_text.delta
+      field: delta
+      kind: reasoning
+  end_events:
+    - response.output_text.done
+    - response.refusal.done
+    - response.function_call_arguments.done
+    - response.custom_tool_call_input.done
+    - response.output_item.done
+    - response.completed
+    - response.incomplete
+    - response.failed
+    - error

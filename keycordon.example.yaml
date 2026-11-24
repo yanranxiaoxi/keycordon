@@ -1,0 +1,48 @@
+# keycordon configuration. Every key is optional; the values below are the
+# defaults. Start with: keycordon serve -config keycordon.yaml
+
+listen: 127.0.0.1:8318             # clients point their base URL here
+upstream: http://127.0.0.1:8317    # CLIProxyAPI or any OpenAI/Anthropic/Gemini compatible endpoint
+mode: enforce                      # enforce: replace + restore; observe: log findings only
+preserve_host: false
+insecure_skip_verify: false
+
+limits:
+  max_body_bytes: 33554432         # 32 MiB as received
+  max_decoded_bytes: 67108864      # 64 MiB after Content-Encoding is removed
+  max_response_bytes: 67108864     # larger non-streaming responses are passed through unrestored
+  max_json_depth: 128
+  scan_timeout: 2s                 # exceeded => 503, the request is never forwarded unscanned
+
+protocols:
+  enabled: []                      # adapter IDs to keep; empty = all (see `keycordon adapters`)
+  extra_dir: ~/.config/keycordon/protocols   # extra/overriding adapter YAML files
+  unsupported_ai_policy: reject    # reject | passthrough (WebSocket, realtime)
+  detect_unregistered: true        # warn when an unregistered endpoint receives AI-looking JSON
+
+request:
+  inject_instruction: true         # tell the model what placeholders are
+  inject_always: true              # inject on every filtered request so the prompt prefix never changes
+
+detector:
+  rules_file: ""                   # empty = embedded rules (betterleaks defaults + keycordon rules)
+  max_decode_depth: 2              # look inside base64 / hex / percent / unicode escapes
+  min_value_length: 8
+
+restore:
+  enabled: true
+
+caller:
+  require_on_non_loopback: true    # non-loopback listeners need a client credential (401 otherwise)
+
+vault:
+  master_key_scope: file           # file | env | process
+  master_key_file: ~/.config/keycordon/master.key   # generated on first start, mode 0600
+  master_key_env: KEYCORDON_MASTER_KEY              # hex or base64, >= 32 bytes; wins over the file
+  max_entries_per_caller: 10000
+  max_sent_texts: 65536            # texts whose spans are frozen (design 7.8)
+  idle_ttl: 24h
+
+log:
+  level: info                      # debug | info | warn | error
+  format: text                     # text | json

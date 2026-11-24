@@ -1,0 +1,151 @@
+# Generation and decision endpoints: only the listed fields are scanned
+# (design 4.7). A selector naming an array or object covers its contents.
+id: openai-embeddings
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /embeddings
+request:
+  fields: [input]
+response:
+  restore: none
+---
+id: openai-images
+extends: [_prompt_only]
+multipart: true
+match:
+  - method: POST
+    path_suffix: /images/generations
+  - method: POST
+    path_suffix: /images/edits
+  - method: POST
+    path_suffix: /images/variations
+request:
+  fields: [prompt, negative_prompt]
+  multipart_fields: [prompt, negative_prompt]
+---
+id: openai-videos
+extends: [_prompt_only]
+multipart: true
+match:
+  - method: POST
+    path_regex: /videos(/generations|/edits|/extensions|/[^/]+/remix)?
+request:
+  fields: [prompt, negative_prompt]
+  multipart_fields: [prompt, negative_prompt]
+---
+id: openai-audio-speech
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /audio/speech
+request:
+  fields: [input, instructions]
+response:
+  restore: none
+---
+id: openai-audio-transcription
+extends: [_prompt_only]
+multipart: true
+match:
+  - method: POST
+    path_suffix: /audio/transcriptions
+  - method: POST
+    path_suffix: /audio/translations
+request:
+  fields: [prompt]
+  multipart_fields: [prompt]
+response:
+  restore: none
+---
+id: openai-moderations
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /moderations
+request:
+  fields: [input]
+response:
+  restore: none
+---
+id: rerank
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /rerank
+request:
+  fields: [query, documents]
+response:
+  restore: none
+---
+id: litellm-decisions
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /decisions
+request:
+  fields: [input, questions]
+---
+id: litellm-systemone
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /systemone
+request:
+  fields: [state, questions]
+---
+id: litellm-extraction
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /extraction
+request:
+  fields: [state, fields, instructions]
+  frozen: [images]
+---
+id: litellm-ocr
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /ocr
+request:
+  fields: [text, instructions, prompt]
+  frozen: [image, document, images]
+---
+id: tokenize
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /tokenize
+  - method: POST
+    path_suffix: /detokenize
+request:
+  fields: [text, prompt, messages, input]
+response:
+  restore: none
+---
+# xAI's own TTS endpoint (CLIProxyAPI /v1/tts). Its body is written in
+# xAI's fields rather than OpenAI's: text, voice_id, language.
+id: xai-tts
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_suffix: /tts
+request:
+  fields: [text, input, instructions]
+response:
+  restore: none
+---
+# Codex's standalone web search (CLIProxyAPI /v1/alpha/search and the
+# /backend-api/codex alias). The body carries the queries under
+# commands.search_query[].q, which is user text and must be scanned.
+id: codex-alpha-search
+extends: [_prompt_only]
+match:
+  - method: POST
+    path_regex: /alpha/search
+request:
+  fields: [commands, query, prompt, input]
+  frozen: [id, model, prompt_cache_key, prompt_cache_retention]
+response:
+  restore: none

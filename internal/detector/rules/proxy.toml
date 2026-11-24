@@ -1,0 +1,306 @@
+# keycordon rules. Extends the betterleaks default rule set with patterns
+# that matter for AI conversation traffic but that the defaults miss.
+title = "keycordon"
+minVersion = "v2.0.0-rc.9"
+
+[extend]
+useDefault = true
+disabledRules = []
+
+# Assignments whose variable name contains a secret word anywhere, e.g.
+# POSTGRES_PASSWORD=..., AWS_SECRET_ACCESS_KEY=..., SMTP_PASSWORD: ...
+[[rules]]
+id = "compound-env-secret"
+description = "Environment-style assignment to a secret-named variable"
+confidence = "medium"
+regex = '''(?i)(?:^|[\s"'`;{,(]|export\s+)[A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|credential|private[_-]?key|auth[_-]?key|client[_-]?secret)[A-Za-z0-9_.-]*\s*[:=]\s*["']?([^\s"'`;,]{8,256})'''
+valueGroup = 1
+keywords = ["pass", "pwd", "secret", "token", "key", "credential"]
+filter = '''
+matchesAny(finding["secret"], [
+  `^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$`,
+  `^\{\{.*\}\}$`,
+  `^<[^>]+>$`,
+  `^\+|\+$`,
+  `^(?i:true|false|null|none|nil|undefined|required|optional|changeme|example|placeholder|your[_-].*|xxx+|\*+)$`,
+  `^(?i:process\.env|os\.environ|os\.getenv|env\.|config\.|settings\.|self\.|this\.)`,
+  `^[a-z]+(?:[A-Z][a-z0-9]*)+\(?$`,
+  `^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$`,
+  `^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$`
+]) || tokenRatio(finding["secret"]) > 3.2
+'''
+
+  [[rules.tests]]
+  name = "postgres password"
+  input = "POSTGRES_PASSWORD=Xk9vT2qLmR7pWs"
+  expect = [{ secret = "Xk9vT2qLmR7pWs" }]
+
+  [[rules.tests]]
+  name = "aws secret yaml"
+  input = "aws_secret_access_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY"
+  expect = [{ secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY" }]
+
+  [[rules.tests]]
+  name = "smtp export"
+  input = "export SMTP_PASSWORD='q8#Lm2!vZr0p'"
+  expect = [{ secret = "q8#Lm2!vZr0p" }]
+
+  [[rules.tests]]
+  name = "env reference"
+  input = "DB_PASSWORD=${DB_PASSWORD}"
+  expect = []
+
+  [[rules.tests]]
+  name = "code reference"
+  input = "api_key = os.environ.get"
+  expect = []
+
+  [[rules.tests]]
+  name = "prose"
+  input = "TOKEN_LIMIT=necessarily"
+  expect = []
+
+# redis://:password@host and similar URIs with an empty user name.
+[[rules]]
+id = "db-uri-anon-user"
+description = "Connection URI with password and empty user name"
+confidence = "high"
+regex = '''\b[a-z][a-z0-9+.-]{1,20}://:([^\s@/:'"`]{4,256})@[A-Za-z0-9.\-\[\]]+'''
+valueGroup = 1
+keywords = ["://:"]
+
+  [[rules.tests]]
+  name = "redis"
+  input = "REDIS_URL=redis://:S3cr3tPassw0rd@cache.internal:6379/0"
+  expect = [{ secret = "S3cr3tPassw0rd" }]
+
+  [[rules.tests]]
+  name = "no password"
+  input = "redis://cache.internal:6379"
+  expect = []
+
+# OpenAI project / service-account / admin keys in the post-2024 format,
+# which the default rule only matches when they contain T3BlbkFJ.
+[[rules]]
+id = "openai-project-key"
+description = "OpenAI project, service account or admin API key"
+confidence = "high"
+regex = '''\b(sk-(?:proj|svcacct|admin|None)-[A-Za-z0-9_-]{20,250})'''
+valueGroup = 1
+keywords = ["sk-proj-", "sk-svcacct-", "sk-admin-", "sk-none-"]
+
+  [[rules.tests]]
+  name = "project key"
+  input = "key sk-proj-4fGh7JkL9mN2pQ5rS8tU1vW3xY6zA0bC2dE4fG6hI8jK0lM"
+  expect = [{ secret = "sk-proj-4fGh7JkL9mN2pQ5rS8tU1vW3xY6zA0bC2dE4fG6hI8jK0lM" }]
+
+  [[rules.tests]]
+  name = "too short"
+  input = "sk-proj-abc"
+  expect = []
+
+# password: value (YAML without '=') and .netrc "password value".
+[[rules]]
+id = "yaml-netrc-secret"
+description = "YAML or netrc password field"
+confidence = "medium"
+regex = '''(?im)(?:^|\s)(?:password|passwd|secret|token)(?:\s*:\s*|\s+)["']?([^\s"'#]{8,256})["']?\s*$'''
+valueGroup = 1
+keywords = ["password", "passwd", "secret", "token"]
+filter = '''
+matchesAny(finding["secret"], [
+  `^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$`,
+  `^\{\{.*\}\}$`,
+  `^<[^>]+>$`,
+  `^(?i:true|false|null|none|required|optional|changeme|placeholder)$`
+]) || tokenRatio(finding["secret"]) > 3.2
+'''
+
+  [[rules.tests]]
+  name = "yaml"
+  input = "db:\n  password: Zq7!xLm2Vp9r\n"
+  expect = [{ secret = "Zq7!xLm2Vp9r" }]
+
+  [[rules.tests]]
+  name = "netrc"
+  input = "machine api.example.com login bob password Hn4kT8wq2Lz"
+  expect = [{ secret = "Hn4kT8wq2Lz" }]
+
+  [[rules.tests]]
+  name = "templated"
+  input = "password: ${DB_PASS}"
+  expect = []
+
+# Random-looking tokens with no surrounding context. A string counts as random
+# when it is long, contains a digit, has high Shannon entropy and tokenizes
+# poorly (few characters per BPE token). Known structured values such as
+# hashes, UUIDs, versions, model names and identifiers are excluded.
+[[rules]]
+id = "bare-random-token"
+description = "High-entropy token without assignment context"
+confidence = "medium"
+specificity = -200
+regex = '''(?:^|[\s"'`(\[{<,;:=])([A-Za-z0-9_\-+/.~!@#$%^&*?]{16,256}={0,2})(?:$|[\s"'`)\]}>,;])'''
+valueGroup = 1
+keywords = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+filter = '''
+len(finding["secret"]) < 16
+|| !matchesAny(finding["secret"], [`[0-9]`])
+|| !matchesAny(finding["secret"], [`[A-Za-z]`])
+|| entropy(finding["secret"]) <= 3.3
+|| tokenRatio(finding["secret"]) > 2.05
+|| matchesAny(finding["secret"], [
+  `^[0-9a-fA-F]{8,128}$`,
+  `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
+  `^(?i:sha1|sha256|sha384|sha512|md5|blake2b|blake3)[:=-]`,
+  `^\d{4}-\d{2}-\d{2}[T ]?\d{2}:\d{2}`,
+  `^v?\d+(?:\.\d+){1,3}`,
+  `^[\d.:/_-]+$`,
+  `^(?i:claude|gpt|grok|gemini|deepseek|qwen|llama|mistral|gemma|kimi|glm|o[1-9]|text-embedding|whisper|dall-e|sora|veo|imagen)[-.]`,
+  `^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$`,
+  `^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$`,
+  `^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$`,
+  `^[a-z]+(?:[A-Z][a-z]{2,}[0-9]*)+$`,
+  `^(?:[A-Z][a-z]{2,}[0-9]*){2,}$`,
+  `^/|^\./|^~/|\.(?:go|py|js|ts|tsx|jsx|rs|java|kt|md|json|ya?ml|toml|txt|html|css|sh|png|jpe?g|svg|lock)$`,
+  `^(?:iVBORw0KGgo|/9j/|R0lGOD|JVBERi0|UEsDBBQ|H4sI|AAAA)`,
+  `^(?:call|toolu|msg|chatcmpl|resp|rs|fc|ctc|run|thread|asst|file|batch|req|evt|item|srvtoolu)_[A-Za-z0-9]+$`,
+  `^(?:SECRET_)?[A-Z0-9_]*_[0-9a-f]{8,64}$`,
+  `^[^@\s]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$`,
+  `^(?:[A-Za-z0-9-]+\.)+(?:com|net|org|io|dev|ai|cn|app|co)(?:/|$)`,
+  `^(?:[a-z0-9-]+\.)+[a-z]{2,12}(?:/[A-Za-z0-9._~@+-]*)*$`
+])
+|| (matchesAny(finding["secret"], [`^[A-Za-z0-9+/]{43}=$`, `^[A-Za-z0-9+/]{86}==$`])
+    && matchesAny(finding["line"], [`\bh1:`, `(?i)sha(?:256|512)[:-]`, `integrity`]))
+'''
+
+  [[rules.tests]]
+  name = "mixed case token"
+  input = "use Zx8Kq2Lm9Pw4Rt7Yv3Bn6Hs1Jd5Gf0Ac please"
+  expect = [{ secret = "Zx8Kq2Lm9Pw4Rt7Yv3Bn6Hs1Jd5Gf0Ac" }]
+
+  [[rules.tests]]
+  name = "lower digits"
+  input = "code: 1qzj865ufrdl1erbx7k2wq"
+  expect = [{ secret = "1qzj865ufrdl1erbx7k2wq" }]
+
+  [[rules.tests]]
+  name = "symbols"
+  input = "the value \"aB3$k9_Qz-7mP+x2Lw/Rt4!\" here"
+  expect = [{ secret = "aB3$k9_Qz-7mP+x2Lw/Rt4!" }]
+
+  [[rules.tests]]
+  name = "email"
+  input = "mail john.doe2024@example-mail.com now"
+  expect = []
+
+  [[rules.tests]]
+  name = "git sha"
+  input = "commit 3f2a9c1b8d7e6f5a4b3c2d1e0f9a8b7c9d8e7f6a"
+  expect = []
+
+  [[rules.tests]]
+  name = "uuid"
+  input = "id 550e8400-e29b-41d4-a716-446655440000 ok"
+  expect = []
+
+  [[rules.tests]]
+  name = "model name"
+  input = "model claude-sonnet-4-5-20250929 used"
+  expect = []
+
+  [[rules.tests]]
+  name = "identifier"
+  input = "const VAULT_KEY_SOURCE_DEFAULT2 here"
+  expect = []
+
+  [[rules.tests]]
+  name = "tool call id"
+  input = "call_8fKq2Lm9Pw4Rt7Yv3Bn6Hs"
+  expect = []
+
+  [[rules.tests]]
+  name = "go.sum hash"
+  input = "github.com/rrethy/ahocorasick v1.0.0 h1:YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E="
+  expect = []
+
+  [[rules.tests]]
+  name = "module path"
+  input = "import gopkg.in/yaml.v3 and go.yaml.in/yaml/v3"
+  expect = []
+
+  [[rules.tests]]
+  name = "placeholder fragment"
+  input = "split `API_KEY_3f9a2c71>` here"
+  expect = []
+
+  [[rules.tests]]
+  name = "random base64 without hash context"
+  input = "secret YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E= here"
+  expect = [{ secret = "YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E=" }]
+
+# Credentials introduced in prose: "the password is X", "token: Y".
+# The defaults only match code-style assignments, so a password mentioned by
+# name inside a chat message was missed entirely.
+#
+# Two rules are needed because betterleaks keywords must be ASCII-lowercase
+# literals that occur in the text; a CJK label therefore needs a rule without
+# keywords.
+#
+# The shared filter rejects ordinary words, which is what most prose looks
+# like: a candidate is kept only if it contains a symbol, or is mixed case
+# with a digit and at least 10 characters. Purely alphabetic passwords are
+# therefore not caught here; the prefix and assignment rules still cover them.
+[[rules]]
+id = "nl-credential-mention"
+description = "Credential announced in prose after an ASCII label"
+confidence = "medium"
+specificity = -150
+regex = '''(?i)(?:password|passwd|passphrase|secret|token|api[ _-]?key|credential)[ \t]{0,3}(?:=>|:=|[:=]|is|are|was|were)[ \t]{0,3}["\x60]?([^\s"\x60,;，。]{8,256})["\x60]?'''
+valueGroup = 1
+keywords = ["password", "passwd", "passphrase", "secret", "token", "credential"]
+filter = '''
+matchesAny(finding["secret"], [
+  `^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$`,
+  `^\{\{.*\}\}$`,
+  `^<[^>]+>$`,
+  `^(?i:true|false|null|none|required|optional|changeme|placeholder|hidden|removed|unset|empty|unknown|redacted|masked|default|invalid|expired|missing|wrong|correct|incorrect|valid|readonly|read-only|disabled|enabled|string|number|boolean|object|array|integer|nobody|anyone|same|different|public|private|test|testing|production|staging|local|remote|here|there|this|that)$`,
+  `^\d+$`,
+  `^[a-z]+$`,
+  `^[A-Z]+$`,
+  `^(?i:os\.environ|os\.getenv|process\.env|env\.|config\.|settings\.|self\.|this\.)`,
+  `[\[\({]$`,
+  `^[^@\s]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$`
+])
+|| (!matchesAny(finding["secret"], [`[^A-Za-z0-9]`])
+    && !(matchesAny(finding["secret"], [`[a-z]`])
+         && matchesAny(finding["secret"], [`[A-Z]`])
+         && matchesAny(finding["secret"], [`[0-9]`])
+         && len(finding["secret"]) >= 10))
+'''
+
+  [[rules.tests]]
+  name = "english is"
+  input = "the password is pa55word-9x"
+  expect = [{ secret = "pa55word-9x" }]
+
+  [[rules.tests]]
+  name = "english assignment"
+  input = "token: Zq7xLm2Vp9r"
+  expect = [{ secret = "Zq7xLm2Vp9r" }]
+
+  [[rules.tests]]
+  name = "prose false positive"
+  input = "the password is required for this account"
+  expect = []
+
+  [[rules.tests]]
+  name = "schema type"
+  input = "the token is string"
+  expect = []
+
+  [[rules.tests]]
+  name = "email is not a credential"
+  input = "the token is sent to bob@example.com"
+  expect = []
+

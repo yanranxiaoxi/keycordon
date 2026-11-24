@@ -1,93 +1,143 @@
 # keycordon
 
+keycordon 是一个面向 LLM API 的轻量反向代理。请求离开本机前，它把请求体中的 API key、令牌、私钥、连接串密码等密钥替换成占位符（例如 `<SECRET_GITHUB_TOKEN_76fff9b6>`）。响应返回客户端前，它再把占位符还原成原值，SSE 流式响应也支持。上游模型始终看不到原始密钥，客户端和 agent 工具照常拿到可执行的结果。
 
+- **检测**：以 Go 库的形式引用 [betterleaks](https://github.com/betterleaks/betterleaks) v2，不复制其代码。在默认规则之外，补充了针对环境变量赋值、无用户名连接串和**无前缀随机串**（结合熵、token 比率和结构白名单判定）的自定义规则。
+- **影响面小**：只处理已登记的 AI 端点（OpenAI Chat / Responses / Codex、Anthropic Messages、Gemini / Vertex / Gemini CLI、Ollama，以及 embeddings、images、audio、moderations、rerank、LiteLLM decisions / systemone 等），其他请求一律原样透传。
+- **不破坏前缀缓存**：只按字节区间改写命中的字符串，其余字节保持不变。占位符由主密钥、调用方和密钥值做 HMAC 确定性生成，重启后不变。占位符说明固定追加在 system 末尾。
+- **只用内存**：映射只存在内存里，重启即丢弃。唯一落盘的是主密钥（`0600`），它不能解出任何密钥。
+- **调用方隔离**：按客户端凭据（`Authorization`、`x-api-key`、`x-goog-api-key`、`?key=`、`?auth_token=`）划分 vault，A 的占位符不能被 B 还原。
 
-## Getting started
+完整设计与边缘情况分析见 [docs/design.md](docs/design.md)；与同类工具 magpie 的对照、可借鉴项与已知缺口见 [docs/magpie-review.md](docs/magpie-review.md)。
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## 构建
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+需要 Go 1.26 及以上版本。
 
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
-
-```
-cd existing_repo
-git remote add origin https://gitlab.soraharu.com/XiaoXi/keycordon.git
-git branch -M main
-git push -uf origin main
+```sh
+go build -o keycordon ./cmd/keycordon
 ```
 
-## Integrate with your tools
+## 使用
 
-* [Set up project integrations](https://gitlab.soraharu.com/XiaoXi/keycordon/-/settings/integrations)
+把 keycordon 放在 CLIProxyAPI（或任何兼容的上游）前面，客户端的 base URL 改为指向 keycordon：
 
-## Collaborate with your team
+```sh
+keycordon serve -upstream http://127.0.0.1:8317 -listen 127.0.0.1:8318
+# 或者
+keycordon serve -config keycordon.yaml
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```text
+Claude Code / Codex / SDK  ──►  keycordon :8318  ──►  CLIProxyAPI :8317  ──►  各家模型
+```
 
-## Test and Deploy
+配置项及默认值见 [keycordon.example.yaml](keycordon.example.yaml)，所有字段都可以省略。
 
-Use the built-in continuous integration in GitLab.
+其他命令：
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```sh
+keycordon scan FILE        # 离线查看某个文件里哪些内容会被替换（结果打印到 stdout，命中统计打印到 stderr）
+keycordon adapters         # 列出已加载的协议适配器
+keycordon version
+```
 
-***
+健康检查：`GET /_keycordon/healthz`，返回版本、规则哈希和主密钥指纹（不是主密钥本身）。
 
-# Editing this README
+## 行为要点
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+| 情况 | 处理 |
+|---|---|
+| 未登记的路径 | `httputil.ReverseProxy` 原样透传，不读 body、不改头 |
+| 请求体压缩（gzip / deflate / br / zstd） | 解压后扫描，转发未压缩的 body；未知编码返回 415 |
+| JSON 非法、嵌套过深 | 400，不转发 |
+| 检测超时或出错 | 503，**绝不转发未扫描的请求**（fail-closed） |
+| 响应还原出错 | 原样透传（fail-open，最坏情况是客户端看到占位符） |
+| 思考内容 / 签名 | 请求侧冻结、响应侧不还原，避免签名校验失败 |
+| WebSocket / Realtime | 默认返回 501，客户端会回退到 HTTP；可配置为透传 |
+| 非回环地址监听且请求没有凭据 | 401 |
+| `mode: observe` | 只记日志、不改写，用来上线前评估误报 |
 
-## Suggestions for a good README
+### 端点覆盖对照
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+与 [cpa-reductant](https://github.com/Moraxyc/cpa-reductant)（同为 CPA 侧隐私插件）的端点清单逐条核对结果：
 
-## Name
-Choose a self-explaining name for your project.
+| 对方的端点 | keycordon | 备注 |
+|---|---|---|
+| `/v1/messages`、`/v1/messages/count_tokens` | ✅ `anthropic-messages` | |
+| `/v1/chat/completions`、`/v1/completions` | ✅ `openai-chat` / `openai-completions` | |
+| `/v1/responses`、`/v1/responses/compact`、`/backend-api/codex/responses` | ✅ `openai-responses` | 另含 Vertex 上的 Claude `rawPredict` |
+| `gemini` 的 `:generateContent`、`:streamGenerateContent`、`:countTokens` | ✅ `gemini` | 另含 `:embedContent`、`:batchEmbedContents`、Vertex 路径 |
+| `/v1beta/interactions`（`model` 与 `agent` 两种请求） | ✅ `interactions` | 全字段扫描，两种请求都覆盖 |
+| `openai-image` / `openai-video` | ✅ `openai-images` / `openai-videos` | |
+| `openai-speech` | ✅ `openai-audio-speech` / `openai-audio-transcription` | 另含 `POST /v1/tts`（xAI 自有字段） |
+| `codex` / `antigravity` | ✅ | 两者最终都走 `/v1internal:*` 与 `/backend-api/codex/*`；keycordon 的 `gemini-cli`、`openai-responses` 已覆盖。也覆盖 Ollama 原生接口 |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+**比对方多覆盖的**：`/v1/embeddings`、`/v1/moderations`、`/v1/rerank`、LiteLLM 的 `/decisions`、`/systemone`、`/extraction`、`/ocr`、`/tokenize`、Anthropic Message Batches、Ollama `/api/chat`、`/api/generate`、Codex 的 `/alpha/search`、Vertex 的 `rawPredict`/`streamRawPredict`。
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+**刻意不支持（返回 501 / 426，不会静默放行）**：所有 WebSocket 升级（`/v1/responses`、`/v1/realtime*`、`/v1/live`、`/v1/tunnel`、`BidiGenerateContent`）和 Realtime 的 HTTP 控制端点（`/v1/realtime/*`）。对方声称支持 WebSocket 客户端经它转发，但上游仍是 HTTP——keycordon 选择明确拒绝，由客户端回退到 HTTP。
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+自定义或覆盖协议适配器：在 `~/.config/keycordon/protocols/` 放 YAML 文件，格式与 [internal/protocol/protocols/](internal/protocol/protocols/) 中的内置适配器相同。ID 相同时覆盖内置适配器。
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## 实测兼容性
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+已用真实上游（小米 MiMo，`https://api.xiaomimimo.com/v1` + `mimo-v2.6-flash`）跑通下列场景，输出均为「上游只看到占位符，客户端拿回原文」：
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+| 场景 | 结果 |
+|---|---|
+| OpenAI Chat 非流式，三个不同格式的密钥 | 全部替换并还原，响应与上游文本逐字一致 |
+| OpenAI Chat SSE，密钥被切成两段跨事件 | 跨事件还原正确，事件条数与上游相同 |
+| 工具调用（非流式 / 流式），密钥在 `arguments` | 还原后仍是合法 JSON，`ghp_` 值正确回填 |
+| 两轮工具循环，`reasoning_content` 按 MiMo 建议回传 | 思考内容保持占位符不还原（签名/一致性），tool 结果里的明文被重新替换 |
+| Anthropic Messages（非流式 + SSE，含 thinking） | 文本还原，thinking 与 signature 不动 |
+| 多轮前缀缓存 | 第 2、3 轮 `cached_tokens` 正常增长（1472 / 1536），占位符不破坏前缀 |
+| 重启后占位符稳定性 | 同一请求在重启前后发给上游的字节完全相同 |
+| 单请求 182 KB、120 轮历史 | 扫描 + 转发正常，全链路 10.7 s（含模型生成） |
+| 6 客户端并发（各自独立凭据） | 无跨调用方密钥泄露，无占位符残留，上游收到的请求里 0 个原始 token |
+| 中文散文凭据（「数据库密码是 …」「秘钥 …」） | 命中并还原（为此新增了两条规则，见 docs/design.md 4.4） |
+| 图像 `data:` URI | 图片数据原样透传，不扫描 |
+| `mode: observe` | 上游收到原文，日志记录命中规则，不改写 |
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+**实测中发现并修复的问题**：
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+1. 散文里提到的密码原本完全漏检（「数据库密码是 hunter2-but-longer」「the password is pa55word-9x」）。原因和取舍见 [docs/design.md](docs/design.md) 4.4 与实现说明第 11 条。
+2. 迟到的已知值会重写已发送的历史，把前缀缓存打穿（上游早已见过明文，改写没有安全收益）。机制见 [docs/design.md](docs/design.md) §7.8。
+3. 规则靠上下文命中时也会命中代码、路径、版本号和过期时间（`PRIVATE_KEY_PATH=~/.ssh/id_ed25519`、`access_token = get_access_token_v2`、`jsonwebtoken = "9.2.0-beta1"` 等）。现在由 `internal/veto` 否决，见 [docs/design.md](docs/design.md) §4.3.1。
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## 检测质量
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+`internal/detector/testdata/eval.json` 是回归评估集：每条用例是一个 agent 会发出的文本，带「必须替换」和「必须原样保留」两组值。当前 33 条用例，precision 1.000 / recall 1.000，CI 门槛均为 0.95。新增规则或调整 filter 时先加用例。
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+与同类工具 magpie 的对照、可借鉴项与取舍见 [docs/magpie-review.md](docs/magpie-review.md)。
 
-## License
-For open source projects, say how it is licensed.
+## 开发
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```sh
+go test ./...
+go test -race ./...
+./scripts/maintenance.sh          # 一键跑完维护清单的全部检查
+```
+
+## 容器
+
+镜像约 24 MB，单静态二进制，以非 root（uid 10001）运行：
+
+```sh
+docker build -t keycordon:latest .
+docker run -d -p 8318:8318 -v kcdata:/var/lib/keycordon \
+  --add-host host.docker.internal:host-gateway \
+  keycordon:latest serve -config /etc/keycordon/config.yaml \
+    -upstream http://host.docker.internal:8317
+```
+
+主密钥、上游地址、调用方隔离、健康检查与升级注意事项见 [docker/README.md](docker/README.md)。CI（`.gitlab-ci.yml`）在默认分支 push 与 `vX.Y.Z` 标签上构建镜像并推送到 Docker Hub 与 GitLab Registry。
+
+## 维护
+
+这个项目有三个会持续变化的外部依赖面：betterleaks 的版本、AI 端点清单、同类实现（magpie 等）的变更。任何一项落后都会导致「以为保护了、其实没有」。
+
+定期审查的完整操作手册见 [docs/maintenance.md](docs/maintenance.md)：节奏与触发条件、每一步的命令、判定标准、审查记录表、以及每次都必须重新确认的核心不变量。
+
+```sh
+./scripts/maintenance.sh   # 自动核对版本基线、跑全部断言、打印当前状态
+```

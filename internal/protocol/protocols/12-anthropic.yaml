@@ -1,0 +1,50 @@
+# Anthropic Messages and compatible entry points (Claude Code, Kimi, GLM),
+# including Claude on Vertex AI (rawPredict) and Bedrock-style invoke paths.
+id: anthropic-messages
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /messages
+  - method: POST
+    path_suffix: /messages/count_tokens
+  - method: POST
+    path_regex: /publishers/anthropic/models/[^/]+:(rawPredict|streamRawPredict|countTokens)
+request:
+  payload:
+    - "**.?type=tool_use.input"
+    - "**.?type=server_tool_use.input"
+    - "tools.[].input_schema"
+  instruction:
+    strategy: string_or_blocks
+    path: system
+response:
+  stream_keys: [index]
+  deltas:
+    - event: content_block_delta
+      field: "delta.?type=text_delta.text"
+      kind: text
+    - event: content_block_delta
+      field: "delta.?type=input_json_delta.partial_json"
+      kind: json_fragment
+    - event: content_block_delta
+      field: "delta.?type=thinking_delta.thinking"
+      kind: reasoning
+  end_events: [content_block_stop, message_stop, error]
+---
+# Message Batches: every request in the batch is scanned. No notice is added
+# (there is no root system prompt) and results are fetched later via GET,
+# which is passed through, so placeholders in batch results stay visible.
+id: anthropic-batches
+extends: [_common]
+match:
+  - method: POST
+    path_suffix: /messages/batches
+request:
+  payload:
+    - "**.?type=tool_use.input"
+    - "**.?type=server_tool_use.input"
+    - "**.tools.[].input_schema"
+  frozen:
+    - "requests.[].custom_id"
+response:
+  restore: none
