@@ -130,7 +130,7 @@ docker run -d -p 8318:8318 -v kcdata:/var/lib/keycordon \
     -upstream http://host.docker.internal:8317
 ```
 
-主密钥、上游地址、调用方隔离、健康检查与升级注意事项见 [docker/README.md](docker/README.md)。CI（`.gitlab-ci.yml`）在默认分支 push 与 `vX.Y.Z` 标签上构建镜像并推送到 Docker Hub 与 GitLab Registry。
+主密钥、上游地址、调用方隔离、健康检查与升级注意事项见 [docker/README.md](docker/README.md)。CI（`.gitlab-ci.yml`）在默认分支 push 上产出 `nightly` + `sha-<短哈希>`（仅 Docker Hub），在 `vX.Y.Z` 标签上产出 `<版本>` + `<次版本>` + `latest`（两个仓库）。`latest` 指向最新发布版本，`nightly` 指向默认分支最新的 git 构建。
 
 ## 维护
 

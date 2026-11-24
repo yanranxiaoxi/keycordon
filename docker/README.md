@@ -150,6 +150,18 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 
 `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` / `CI_REGISTRY_IMAGE` 由 GitLab 自动注入，不用配。GitLab 自己的 Container Registry 需要在项目里启用：Settings → General → Visibility → Container Registry。
 
+### 镜像标签策略
+
+| 触发 | 产出标签 | 推到 |
+|---|---|---|
+| 默认分支 push | `sha-<短哈希>`、`nightly` | 仅 Docker Hub |
+| `vX.Y.Z` 标签 | `<X.Y.Z>`、`<X.Y>`、`latest` | Docker Hub + GitLab Registry |
+
+- **`nightly`** 始终指向默认分支最新一次构建。它**只能**来自默认分支：脚本会检查 `CI_COMMIT_BRANCH == CI_DEFAULT_BRANCH`，其他分支直接失败，避免手动触发或规则改动让 `nightly` 指向功能分支。
+- **`latest`** 始终指向最新的发布版本，与 `nightly` 互不影响。
+- GitLab Registry 只留发布版本，不会被每天几十个 nightly 塞满。
+- 需要固定某一夜的构建时用 `sha-<短哈希>`，它不可变。
+
 ### 可选（覆盖流水线默认值）
 
 | 变量 | 默认 | 什么时候改 |
@@ -176,4 +188,26 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-成功后两个仓库都应该有 `0.1.0`、`0.1`、`latest` 三个标签。
+成功后：
+
+- Docker Hub：`0.1.0`、`0.1`、`latest`
+- GitLab Registry：`0.1.0`、`0.1`、`latest`
+
+再往默认分支推一个普通提交，验证 nightly：
+
+```sh
+git commit --allow-empty -m "chore: trigger nightly" && git push
+```
+
+Docker Hub 应该多出 `sha-<短哈希>` 和 `nightly`；GitLab Registry 不应变化。
+
+## 本地构建推送
+
+CI 的打标签逻辑在 `scripts/ci-docker.sh` 里，本地也能用（`DRY_RUN=1` 只打印命令）：
+
+```sh
+DOCKERHUB_USER=me ./scripts/ci-docker.sh nightly
+DOCKERHUB_USER=me CI_COMMIT_TAG=v1.2.3 \
+  CI_REGISTRY_IMAGE=registry.example.com/me/keycordon \
+  ./scripts/ci-docker.sh release
+```

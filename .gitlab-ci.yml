@@ -3,8 +3,8 @@ stages:
   - docker
 
 # 流水线策略：
-#   - 默认分支的 push 创建流水线，产出 latest + sha-<短哈希>
-#   - 打 vX.Y.Z 标签创建流水线，产出 X.Y.Z / X.Y / latest
+#   - 默认分支的 push：nightly 构建（sha-<短哈希> + nightly，只推 Docker Hub）
+#   - 打 vX.Y.Z 标签：release 构建（版本号 + 次版本号 + latest，推两个仓库）
 #   - Merge Request、其它分支的 push 一律不创建流水线，
 #     因此不可能触发任何镜像构建或推送
 workflow:
@@ -58,7 +58,39 @@ go-test:
 #         Docker        #
 # #######################
 
-docker-build:
+# 构建、冒烟测试、打标签、推送的实际步骤在 scripts/ci-docker.sh 里，
+# 这样同一套逻辑在本地也能跑（CI 之外的调试），两边不会漂移。
+# 两个 job 只在「调用哪个模式」和「什么时候跑」上不同。
+
+# ---- nightly：默认分支的每次 push ----
+# 标签 sha-<短哈希> 与 nightly，只推 Docker Hub。
+# GitLab Registry 只留发布版本，避免被每天几十个临时镜像塞满。
+docker-nightly:
+  stage: docker
+  tags:
+    - linux
+    - docker
+    - amd64
+  image: docker.io/library/docker:cli
+  services:
+    - name: docker.io/library/docker:dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ''
+  needs:
+    - job: go-test
+  before_script:
+    - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USER" --password-stdin docker.io
+  script:
+    # 脚本自己检查 CI_COMMIT_BRANCH == CI_DEFAULT_BRANCH，非默认分支直接失败，
+    # 避免手动触发或规则改动让 nightly 指向功能分支
+    - ./scripts/ci-docker.sh nightly
+
+# ---- release：vX.Y.Z 标签 ----
+# 标签 <版本号>、<次版本号>、latest，推 Docker Hub 与 GitLab Registry。
+# latest 始终指向最新的发布版本；nightly 始终指向最新的 git 构建。
+docker-release:
   stage: docker
   tags:
     - linux
@@ -77,55 +109,4 @@ docker-build:
     - echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USER" --password-stdin docker.io
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
-    # ---- 版本与标签 ----
-    # tag 用去掉 v 的版本号；分支用 0.0.0-<短哈希>，与 Go 的伪版本习惯一致
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        VERSION="${CI_COMMIT_TAG#v}"
-        MAJOR_MINOR="$(echo "$VERSION" | cut -d. -f1,2)"
-        TAGS="${VERSION} ${MAJOR_MINOR} latest"
-      else
-        VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
-        TAGS="latest sha-${CI_COMMIT_SHORT_SHA}"
-      fi
-      echo "构建版本：${VERSION}"
-      echo "镜像标签：${TAGS}"
-      printf 'VERSION=%s\nTAGS=%s\n' "$VERSION" "$TAGS" > version.env
-
-    # ---- 构建 ----
-    # --pull 保证基础镜像是最新的补丁版本
-    - docker build --pull --provenance=false --sbom=false
-        --build-arg "VERSION=${VERSION}"
-        --build-arg "GOPROXY=${GOPROXY}"
-        --build-arg "GOSUMDB=${GOSUMDB}"
-        -t "${CONTAINER_IMAGE_NAME}:build" .
-
-    # ---- 冒烟测试：镜像能启动、能打印版本、能加载全部适配器 ----
-    - docker run --rm "${CONTAINER_IMAGE_NAME}:build" version
-    - docker run --rm "${CONTAINER_IMAGE_NAME}:build" adapters > /dev/null
-
-    # ---- 打标签并推送 ----
-    - |
-      set -e
-      for tag in ${TAGS}; do
-        docker tag "${CONTAINER_IMAGE_NAME}:build" "docker.io/${DOCKERHUB_USER}/${CONTAINER_IMAGE_NAME}:${tag}"
-        docker tag "${CONTAINER_IMAGE_NAME}:build" "${CI_REGISTRY_IMAGE}:${tag}"
-      done
-      for tag in ${TAGS}; do
-        echo "→ Docker Hub ${DOCKERHUB_USER}/${CONTAINER_IMAGE_NAME}:${tag}"
-        docker push "docker.io/${DOCKERHUB_USER}/${CONTAINER_IMAGE_NAME}:${tag}"
-        echo "→ GitLab     ${CI_REGISTRY_IMAGE}:${tag}"
-        docker push "${CI_REGISTRY_IMAGE}:${tag}"
-      done
-
-    # ---- 摘要 ----
-    - |
-      echo "完成。"
-      echo "  Docker Hub: docker.io/${DOCKERHUB_USER}/${CONTAINER_IMAGE_NAME}"
-      echo "  GitLab    : ${CI_REGISTRY_IMAGE}"
-      echo "  标签      : ${TAGS}"
-      echo "  版本      : ${VERSION}"
-  artifacts:
-    expire_in: 1 day
-    reports:
-      dotenv: version.env
+    - ./scripts/ci-docker.sh release
