@@ -161,6 +161,7 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 - **`latest`** 始终指向最新的发布版本，与 `nightly` 互不影响。
 - GitLab Registry 只留发布版本，不会被每天几十个 nightly 塞满。
 - 需要固定某一夜的构建时用 `sha-<短哈希>`，它不可变。
+- **两个 job 各自带 `rules`**。`workflow.rules` 只决定「这条流水线跑不跑」，不区分 job；不加 job 级 `rules` 的话，分支流水线里 `docker-release` 会一起跑，然后因为 `CI_COMMIT_TAG` 为空而失败。
 
 ### 可选（覆盖流水线默认值）
 

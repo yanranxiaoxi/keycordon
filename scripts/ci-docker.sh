@@ -47,7 +47,13 @@ run() {
 
 # ---- what this build is --------------------------------------------------
 if [ "$mode" = release ]; then
-	: "${CI_COMMIT_TAG:?release needs CI_COMMIT_TAG}"
+	# A release comes from a vX.Y.Z tag; the CI job's rules already exclude
+	# everything else, so an empty value here means the job was run by hand.
+	if [ -z "${CI_COMMIT_TAG:-}" ]; then
+		echo "release needs a vX.Y.Z tag (CI_COMMIT_TAG is empty)" >&2
+		echo "usage: git tag vX.Y.Z && git push origin vX.Y.Z" >&2
+		exit 1
+	fi
 	version="${CI_COMMIT_TAG#v}"
 	minor="${version%.*}"
 	tags="${version} ${minor} latest"
@@ -56,13 +62,19 @@ else
 	# tag, and a feature branch is not what users should get when they pull
 	# it. The pipeline rules already exclude other branches; this is the
 	# guard for a manual run or a rule change.
-	: "${CI_COMMIT_BRANCH:?nightly needs CI_COMMIT_BRANCH}"
-	: "${CI_DEFAULT_BRANCH:?nightly needs CI_DEFAULT_BRANCH}"
+	if [ -z "${CI_COMMIT_BRANCH:-}" ] || [ -z "${CI_DEFAULT_BRANCH:-}" ]; then
+		echo "nightly needs CI_COMMIT_BRANCH and CI_DEFAULT_BRANCH" >&2
+		exit 1
+	fi
 	if [ "$CI_COMMIT_BRANCH" != "$CI_DEFAULT_BRANCH" ]; then
 		echo "nightly is built from ${CI_DEFAULT_BRANCH} only, not ${CI_COMMIT_BRANCH}" >&2
 		exit 1
 	fi
-	sha="${CI_COMMIT_SHORT_SHA:?nightly needs CI_COMMIT_SHORT_SHA}"
+	if [ -z "${CI_COMMIT_SHORT_SHA:-}" ]; then
+		echo "nightly needs CI_COMMIT_SHORT_SHA" >&2
+		exit 1
+	fi
+	sha="$CI_COMMIT_SHORT_SHA"
 	version="0.0.0-${sha}"
 	tags="sha-${sha} nightly"
 fi
@@ -88,7 +100,10 @@ run docker run --rm "$BUILD" adapters >/dev/null
 # GitLab registry holds releases alone instead of every nightly.
 registry=""
 if [ "$mode" = release ]; then
-	: "${CI_REGISTRY_IMAGE:?release needs CI_REGISTRY_IMAGE}"
+	if [ -z "${CI_REGISTRY_IMAGE:-}" ]; then
+		echo "release needs CI_REGISTRY_IMAGE" >&2
+		exit 1
+	fi
 	registry="$CI_REGISTRY_IMAGE"
 fi
 
