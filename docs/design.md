@@ -1092,7 +1092,7 @@ audit:
 | 65 | 配置文件热加载 | 规则变化导致同一文本判定改变 | 第一版不支持热加载，改配置需重启；重启影响见 #40、#41 |
 | 66 | 磁盘写满（审计日志） | 代理阻塞 | 审计异步写 + 有界队列，队列满时丢弃并计数，绝不阻塞请求 |
 | 67 | 系统时间跳变 | TTL/日志时间 | 见 #42 |
-| 68 | 高并发 + 大 body | 内存峰值 | 单请求 body 上限 × 并发数需评估；建议对 body 超阈值（如 4 MiB）的请求串行化处理 |
+| 68 | 高并发 + 大 body | 内存峰值 | 不串行化。请求之间完全并发（见 11.4），内存上限 = 并发数 × `max_decoded_bytes`；用 `limits.max_body_bytes` / `max_decoded_bytes` 和操作系统内存限制来约束，而不是排队——排队会让一个慢请求拖住所有人的首字节 |
 | 69 | 上游 TLS 证书错误 | 连接失败 | 默认不跳过验证；`insecure_skip_verify` 可配但需显式开启并告警 |
 | 70 | 代理自身 panic | 整个进程退出 | `recover` 中间件；panic 信息不含请求体 |
 | 71 | 同一端口被占用 | 启动失败 | 明确错误信息 + 退出码 |
@@ -1184,7 +1184,37 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 - 极端情况（1 M token、1 000 个密钥）：**+100 ms**，仍小于厂商首字节时间的 1/10。
 - 无密钥的请求也走完整解析，1 M token 约 +20~37 ms；这部分是 JSON 遍历的成本，与是否替换无关。
 
-### 11.3 启动与内存
+### 11.3 并发模型
+
+**请求之间完全并发，不排队。** 一个请求从头到尾不会等待另一个请求：
+
+| 环节 | 是否共享 | 影响 |
+|---|---|---|
+| `net/http` 监听 | — | 每个连接一个 goroutine |
+| `httputil.ReverseProxy` | — | 每个请求独立，SSE 边到边转发（`FlushInterval: -1`） |
+| `detector.Scanner` | 单例，内部 `semaphore.Weighted` 限流 | `WithWorkers` 默认 `4 × GOMAXPROCS`；worker 数达到上限时**才**排队，且只对扫描阶段排队 |
+| `vault.Caller` | 每个调用方一把 `sync.Mutex` | `Placeholder` / `FindKnown` 期间持锁，微秒级 |
+| `vault.Sent` | 一把 `sync.Mutex` | 查表/写入哈希，微秒级 |
+| 主密钥、规则、适配器 | 只读 | 无锁 |
+
+**实测**（本机 24 核）：
+
+| 场景 | 耗时 | 说明 |
+|---|---|---|
+| 8 个并发请求，上游各阻塞 300 ms | 303 ms | 串行会是 2.4 s |
+| 4 个并发 SSE 流，每流约 500 ms | 502 ms | 串行会约 2 s |
+| 同一调用方，16 goroutine × 2000 次 `Placeholder` + `FindKnown` | 65 ms | 每请求约 11 µs |
+| 同上，8 个不同调用方分摊 | 136 ms | 不同调用方之间也不互相阻塞，这里更慢是因为 goroutine 分散到 24 核上调度 |
+
+`TestConcurrentRequests` 与 `TestConcurrentStreams` 守着前两条。
+
+**唯一的排队点**是 betterleaks 的 worker 池。设计意图是防止大量并发扫描把 goroutine 数量爆炸式放大；因为每次扫描只占用一个 slot、单个请求通常只有几毫秒，实际很难触顶。若确实需要提高并发度，`detector.Options.Workers` 可以调大。
+
+### 11.4 内存与并发的关系
+
+内存峰值 ≈ 并发请求数 × 单个请求的 body 大小（解压后）。默认 `max_decoded_bytes` 是 64 MiB，100 个并发大请求最坏是 6.4 GiB——所以限制应当来自 `limits` 和操作系统/容器内存上限，而不是把请求串行化。串行化会让一个慢请求拖住所有人的首字节，代价远大于内存。
+
+### 11.5 启动与内存
 
 依据附录 A 的实测（i7-14650HX，单 Scanner，`WithPrecompile`）：
 

@@ -336,6 +336,7 @@ go build ./... && go vet ./... && gofmt -l . && go test -race -count=1 ./...
 | 检测质量 ≥ 0.95 / 0.95 | `TestEvalCorpus` |
 | 扫描吞吐 ≥ 100 MB/s（无密钥）/ 25 MB/s（1000 个密钥） | `BenchmarkScan100KB`、`SCALE=1 go test ./internal/rewrite -run TestScaleTable` |
 | TTFT 增量 ≤ 20 ms（典型请求）/ ≤ 100 ms（1M token、1000 密钥） | 见 design.md §11.2，改动热路径后重测 |
+| 请求之间不串行 | `TestConcurrentRequests`、`TestConcurrentStreams`（见 design.md §11.3） |
 | 镜像可构建且能启动 | CI 的 `docker-build` 冒烟测试（`version` + `adapters`） |
 | 镜像以非 root 运行、密钥落在卷上 | 手工：`podman run --rm -v kcd:/var/lib/keycordon ...` 后检查 `/var/lib/keycordon/master.key` 属主 |
 
