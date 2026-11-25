@@ -65,13 +65,13 @@ func TestLimitsValidation(t *testing.T) {
 
 func TestLimitsDefaults(t *testing.T) {
 	c := Default()
-	if c.Limits.MaxBodyBytes != 32<<20 {
+	if c.Limits.MaxBodyBytes != 8<<20 {
 		t.Errorf("max_body_bytes = %d", c.Limits.MaxBodyBytes)
 	}
-	if c.Limits.MaxDecodedBytes != 64<<20 {
+	if c.Limits.MaxDecodedBytes != 16<<20 {
 		t.Errorf("max_decoded_bytes = %d", c.Limits.MaxDecodedBytes)
 	}
-	if c.Limits.MaxResponseBytes != 64<<20 {
+	if c.Limits.MaxResponseBytes != 16<<20 {
 		t.Errorf("max_response_bytes = %d", c.Limits.MaxResponseBytes)
 	}
 	if c.Limits.MaxJSONDepth != 128 {

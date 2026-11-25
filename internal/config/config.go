@@ -106,14 +106,20 @@ func (c *Config) applyDefaults() {
 	def(&c.Listen, "127.0.0.1:8318")
 	def(&c.Upstream, "http://127.0.0.1:8317")
 	def(&c.Mode, "enforce")
+	// Sized for a 2M-token text request, which is 3-11 MiB depending on the
+	// content (design 11.4), with room for the JSON envelope. A request with
+	// several images will need more: a model bills images per tile, so ten
+	// 4 MiB PNGs is a 53 MiB body.
 	if c.Limits.MaxBodyBytes == 0 {
-		c.Limits.MaxBodyBytes = 32 << 20
+		c.Limits.MaxBodyBytes = 8 << 20
 	}
+	// Twice the body limit: a request may arrive compressed, and gzip on JSON
+	// can expand 5-8x.
 	if c.Limits.MaxDecodedBytes == 0 {
-		c.Limits.MaxDecodedBytes = 64 << 20
+		c.Limits.MaxDecodedBytes = 16 << 20
 	}
 	if c.Limits.MaxResponseBytes == 0 {
-		c.Limits.MaxResponseBytes = 64 << 20
+		c.Limits.MaxResponseBytes = 16 << 20
 	}
 	if c.Limits.MaxJSONDepth == 0 {
 		c.Limits.MaxJSONDepth = 128

@@ -237,7 +237,7 @@ response:
 | 检查 | 规则 | 失败响应 |
 |---|---|---|
 | WebSocket 升级（落在 `filter: true` 端点上，例如 Codex 对 `/v1/responses` 的 WS 升级） | `Upgrade: websocket` | 按 `unsupported_ai_policy`，默认 426，客户端会回退 HTTP |
-| body 大小 | 压缩前 ≤ `max_body_bytes`（默认 32 MiB），解压后 ≤ `max_decoded_bytes`（默认 64 MiB） | 413 |
+| body 大小 | 压缩前 ≤ `max_body_bytes`（默认 8 MiB），解压后 ≤ `max_decoded_bytes`（默认 16 MiB） | 413 |
 | `Content-Encoding` | 支持 `identity`、`gzip`、`deflate`、`zstd`、`br`，可多层；其他编码 | 415 |
 | 解压 | 使用带上限的 reader，防止解压炸弹 | 400 |
 | `Content-Type` | 必须是 `application/json`（含 `+json`、缺省视为 JSON）；`multipart/form-data` 仅限适配器声明 `content_type: multipart` 的端点（见 4.8）；已登记 AI 端点出现其他类型视为异常 | 415 |
@@ -924,8 +924,8 @@ upstreams:
     url: http://127.0.0.1:8317
 
 limits:
-  max_body_bytes: 33554432        # 32 MiB（压缩后）
-  max_decoded_bytes: 67108864     # 64 MiB（解压后）
+  max_body_bytes: 8388608         # 8 MiB（压缩后）
+  max_decoded_bytes: 16777216     # 16 MiB（解压后）
   max_json_depth: 128
   upstream_timeout: 600s          # 长推理请求需要足够长
 
@@ -1212,7 +1212,7 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 
 ### 11.4 内存与并发的关系
 
-内存峰值 ≈ 并发请求数 × 单个请求的 body 大小（解压后）。默认 `max_decoded_bytes` 是 64 MiB，100 个并发大请求最坏是 6.4 GiB——所以限制应当来自 `limits` 和操作系统/容器内存上限，而不是把请求串行化。串行化会让一个慢请求拖住所有人的首字节，代价远大于内存。
+内存峰值 ≈ 并发请求数 × 单个请求的 body 大小（解压后）。默认 `max_decoded_bytes` 是 16 MiB，100 个并发大请求最坏是 1.6 GiB——所以限制应当来自 `limits` 和操作系统/容器内存上限，而不是把请求串行化。串行化会让一个慢请求拖住所有人的首字节，代价远大于内存。
 
 **一个 token 占几个字节**（决定「2M 上下文 = 多大 body」）：
 
@@ -1227,7 +1227,7 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 
 来源：cl100k_base 的切分规律 + 编码本身的膨胀率。`TestDocumentSize` 把这几行钉成测试。
 
-所以**最大的 2M 上下文请求，纯文本不会超过约 11 MiB**。默认 `max_body_bytes: 32 MiB` 留了接近 3 倍余量。
+所以**最大的 2M 上下文请求，纯文本不会超过约 11 MiB**。默认 `max_body_bytes: 8 MiB` 刚好覆盖到 2M token 的英文/中文/代码混排；全 JSON 或全密集代码的极端 2M 请求（约 11 MiB）会拿到 413，需要调大（见 §11.4 结尾）。
 
 **例外是图片。** 模型按 tile 计价而不是按字节，所以 4 MiB 的 PNG（base64 后 5.6 MiB）只算几千 token。于是一个请求的 body 大小与它的 token 数**无关**：
 
@@ -1237,7 +1237,18 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 | 10 × 4 MiB | 53.3 MiB |
 | 50 × 4 MiB | 266.7 MiB |
 
-这才是 `max_body_bytes` 真正的约束对象。要接受多图请求就得调大它，同时按 §11.4 的公式重算内存。
+这才是 `max_body_bytes` 真正的约束对象。要接受多图请求就得调大它，同时按上式的公式重算内存。
+
+**遇到 413 时怎么调**（默认 8 MiB / 16 MiB 是按「纯文本、2M 上下文」定的，够绝大多数 agent 用）：
+
+| 现象 | 调哪个 | 建议值 |
+|---|---|---|
+| 带几张图就被拒 | `max_body_bytes` 和 `max_decoded_bytes` 一起 | 按图片数 × 5.6 MiB 再加余量；10 张图 → 64 MiB / 128 MiB |
+| 全 JSON / 全密集代码的 2M 请求 | 同上 | 16 MiB / 32 MiB |
+| 只有解压后才超 | 只调 `max_decoded_bytes` | 至少 2 倍 `max_body_bytes` |
+| 大响应被原样透传（客户端看到占位符） | `max_response_bytes` | 按最大非流式响应估 |
+
+**调大之前先重算内存**：`max_decoded_bytes × 并发数`。把 8/16 MiB 调到 64/128 MiB，内存峰值就是 8 倍。
 
 ### 11.5 启动与内存
 

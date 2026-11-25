@@ -58,6 +58,42 @@ keycordon version
 | 非回环地址监听且请求没有凭据 | 401 |
 | `mode: observe` | 只记日志、不改写，用来上线前评估误报 |
 
+### 请求体大小限制
+
+默认 `max_body_bytes: 8 MiB`（收到的原始 body）、`max_decoded_bytes: 16 MiB`（解压后）。超出分别返回 **413**。
+
+这是按「纯文本、2M token 上下文」定的：
+
+| 内容 | 字节/token | 2M token |
+|---|---|---|
+| JSON / 密集代码 | ~4.8 | 10.9 MiB |
+| 英文 | ~4.0 | 7.6 MiB |
+| Python / Go | ~3.5 | 7.6 MiB |
+| base64 | ~3.0 | 5.7 MiB |
+| 中文 | ~1.5 | 2.9 MiB |
+
+所以英文、中文、常规代码的 2M 请求都在 8 MiB 以内。
+
+**什么时候需要调大**（改 `keycordon.yaml` 的 `limits` 段）：
+
+| 症状 | 原因 | 建议 |
+|---|---|---|
+| 带图请求 413 | 模型按 tile 计价，图片的 body 远大于它的 token 数：一张 4 MiB 的 PNG 是 5.6 MiB 的 body，10 张就是 53 MiB | `max_body_bytes: 64MiB`、`max_decoded_bytes: 128MiB` |
+| 纯 JSON / 纯密集代码的 2M 请求 413 | 这种内容每 token 占 4.8 字节，2M 就是约 11 MiB | 16 MiB / 32 MiB |
+| 只有压缩请求才 413 | 压缩比高，解压后超了 | 只调 `max_decoded_bytes`，至少是 `max_body_bytes` 的 2 倍 |
+| 大响应里仍然看到占位符 | 非流式响应超过 `max_response_bytes` 时不做还原、原样透传 | 调大 `max_response_bytes` |
+
+```yaml
+limits:
+  max_body_bytes: 67108864      # 64 MiB
+  max_decoded_bytes: 134217728  # 128 MiB
+  max_response_bytes: 67108864  # 64 MiB
+```
+
+**调大之前先算内存**：内存峰值 ≈ `max_decoded_bytes` × 并发数。从 16 MiB 提到 128 MiB 就是 8 倍——100 个并发从 1.6 GiB 变成 12.8 GiB。宁可用容器内存上限约束，也不要把请求串行化（那会让一个慢请求拖住所有人的首字节）。
+
+完整的字节/token 推导见 [docs/design.md](docs/design.md) §11.4。
+
 ### 端点覆盖对照
 
 与 [cpa-reductant](https://github.com/Moraxyc/cpa-reductant)（同为 CPA 侧隐私插件）的端点清单逐条核对结果：
