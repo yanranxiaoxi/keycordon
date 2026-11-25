@@ -172,14 +172,19 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 
 路径规则与 Docker 标签一致：
 
-| 触发 | 版本目录 | 文件名前缀 | 性质 |
+| 触发 | 目录 | 文件名 | 性质 |
 |---|---|---|---|
-| 默认分支 push | `nightly` | `keycordon_nightly_*` | 固定目录，每次**删除旧包后重传** |
-| `vX.Y.Z` 标签 | `X.Y.Z` | `keycordon_<版本>_*` | 固定目录，永不覆盖 |
+| 默认分支 push | `nightly` | `keycordon_0.0.0-<短哈希>_linux_amd64` | 固定目录，每次**删除旧包后重传** |
+| `vX.Y.Z` 标签 | `X.Y.Z` | `keycordon_X.Y.Z_linux_amd64` | 固定目录，永不覆盖 |
 
-仓库里因此最多只有「各发布版本 + 一个 nightly」，不会因为每次提交都多一个目录而无限增长。
+**目录固定、文件名带哈希**是有意的组合：
 
-nightly 的二进制文件名带 `nightly`，但编进二进制的版本仍是 `0.0.0-<短哈希>`，`keycordon version` 能看出确切来源：
+- **目录固定**（`nightly`）→ 仓库里最多只有「各发布版本 + 一个 nightly」，不会因为每次提交多一个目录而无限膨胀。
+- **文件名带哈希**（`0.0.0-a6e19b65`）→ 下载后一眼就能看出是哪次构建、比手上的新不新，不用解开压缩包跑 `keycordon version`。
+
+两者不冲突：包内是覆盖写，所以同一个目录里永远只有一套文件；文件名跟着构建走，所以每次内容都不同。
+
+`keycordon version` 输出的版本与文件名一致：
 
 ```sh
 $ keycordon version
@@ -189,24 +194,32 @@ keycordon 0.0.0-a6e19b65
 下载地址：
 
 ```text
-${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/keycordon/<版本>/<文件名>
+${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/keycordon/<目录>/<文件名>
 ```
 
 例如：
 
 ```sh
-# 最新发布版本
+# 发布版本
 curl -fL -o keycordon \
   "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/1.2.3/keycordon_1.2.3_linux_amd64"
 
-# nightly
+# nightly：目录固定，文件名要带哈希（先看页面确认，或用 API 列文件）
 curl -fL -o keycordon \
-  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/nightly/keycordon_nightly_linux_amd64"
+  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/nightly/keycordon_0.0.0-a6e19b65_linux_amd64"
 ```
 
-`nightly` 目录每次构建都会被替换，所以它永远指向默认分支最新一次的构建。
+`nightly` 目录每次构建都会被替换，所以它永远指向默认分支最新一次的构建；文件名里的哈希告诉你具体是哪一次。列当前文件名：
 
-在 GitLab 页面的 **Deploy → Package Registry** 可以直接浏览和下载。
+```sh
+curl -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages?package_version=nightly" \
+  | grep -o '"id":[0-9]*' | cut -d: -f2 | xargs -I{} \
+  curl -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+    "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/{}/package_files"
+```
+
+或者在 GitLab 页面的 **Deploy → Package Registry** 里看，最新一次构建的文件名一目了然，也能直接点下载。
 
 ### 镜像标签策略
 

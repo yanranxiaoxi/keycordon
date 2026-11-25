@@ -86,27 +86,28 @@ go-test:
   needs:
     - job: go-test
   script:
-    # 两个版本号：
-    #   BINARY_VERSION  编进二进制，`keycordon version` 能看到确切是哪次构建
-    #   PACKAGE_VERSION 软件包仓库的目录名与文件名前缀
-    # nightly 的包目录固定叫 nightly，每次覆盖同一个包，不会越积越多。
+    # 两个名字，各管一件事：
+    #   BINARY_VERSION  编进二进制，同时进文件名：
+    #                   nightly 时是 0.0.0-<短哈希>，用户看文件名就知道是哪次构建
+    #   DIR_VERSION     软件包仓库的目录名：
+    #                   nightly 时固定为 nightly，配合同步删除，仓库不会膨胀
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
         BINARY_VERSION="${CI_COMMIT_TAG#v}"
-        PACKAGE_VERSION="${BINARY_VERSION}"
+        DIR_VERSION="${BINARY_VERSION}"
       else
         BINARY_VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
-        PACKAGE_VERSION="nightly"
+        DIR_VERSION="nightly"
       fi
-      echo "二进制版本 ${BINARY_VERSION}，软件包版本 ${PACKAGE_VERSION}"
+      echo "文件名版本 ${BINARY_VERSION}，软件包目录 ${DIR_VERSION}"
     - mkdir -p dist
     # -trimpath 去掉本地路径；-buildvcs=false 让没有 git 元数据的浅克隆也能构建
     # 折成一行：YAML 的续行会把换行和缩进原样交给 shell，多行命令要写成
     # 单个 script 条目，否则 `go build` 会缺参数。
-    - GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=${BINARY_VERSION}" -o "dist/keycordon_${PACKAGE_VERSION}_${GOOS}_${GOARCH}${EXT}" ./cmd/keycordon
+    - GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=${BINARY_VERSION}" -o "dist/keycordon_${BINARY_VERSION}_${GOOS}_${GOARCH}${EXT}" ./cmd/keycordon
     # 交叉编译没法运行，但 `go version -m` 会打印二进制里记录的 GOOS/GOARCH，
     # 借此确认架构写对了（不依赖 file 命令是否存在）
-    - go version -m "dist/keycordon_${PACKAGE_VERSION}_${GOOS}_${GOARCH}${EXT}" | grep -E "GOARCH|GOOS"
+    - go version -m "dist/keycordon_${BINARY_VERSION}_${GOOS}_${GOARCH}${EXT}" | grep -E "GOARCH|GOOS"
     - ls -l dist/
   artifacts:
     expire_in: 1 week
@@ -232,15 +233,16 @@ upload:
   script:
     # 版本号在这里重算一次，而不是靠 dotenv artifact 从 build 传下来：
     # dotenv 只沿直接的 needs 传递，多一跳就丢了，重算 4 行更可靠。
-    # 规则与 .build 一致：tag 用版本号，分支固定用 nightly。
+    # 规则与 .build 一致：目录名 tag 用版本号、分支固定 nightly；
+    # 文件名都用带哈希的版本号，用户一眼就能看出是不是最新构建。
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        PACKAGE_VERSION="${CI_COMMIT_TAG#v}"
+        DIR_VERSION="${CI_COMMIT_TAG#v}"
       else
-        PACKAGE_VERSION="nightly"
+        DIR_VERSION="nightly"
       fi
-      echo "软件包版本 ${PACKAGE_VERSION}"
-    - PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${PACKAGE_VERSION}"
+      echo "软件包目录 ${DIR_VERSION}"
+    - PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${DIR_VERSION}"
     # nightly 要真正被替换掉：GitLab 默认把同名文件追加进已有包，旧文件会和
     # 新文件一起留着，体积照样长。删掉整个 nightly 包再上传，一次运行只会留下
     # 一套文件。发布版本不删：各 tag 目录互不相干，且 tag 内容不会变。
@@ -255,7 +257,7 @@ upload:
         # 第二个字段不是 name，不会误匹配。只用 grep/cut，不需要 jq。
         response=$(curl --silent --show-error --fail-with-body \
           --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${pkgs}?package_type=generic&package_name=${PACKAGE_NAME}&package_version=${PACKAGE_VERSION}&per_page=100") \
+          "${pkgs}?package_type=generic&package_name=${PACKAGE_NAME}&package_version=${DIR_VERSION}&per_page=100") \
           || { echo "查询已有 nightly 包失败：${response}" >&2; exit 1; }
         # 第一次运行时还没有 nightly 包，grep 匹配不到会返回 1；
         # 在 set -e 下这会直接中止整个 job，所以要吞掉这个返回码。
