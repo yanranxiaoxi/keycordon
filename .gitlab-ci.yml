@@ -1,7 +1,6 @@
 stages:
   - test
   - build
-  - package
   - upload
   - docker
 
@@ -64,8 +63,7 @@ go-test:
 # #######################
 #
 # 每个平台一个 job，产物直接按「keycordon_<版本>_<os>_<arch>[.exe]」命名，
-# package 阶段的 checksums 与 upload 靠这个前缀收集。用 .build 作模板，
-# 每个平台只写三个变量。
+# upload 靠这个前缀收集产物。用 .build 作模板，每个平台只写三个变量。
 
 .build:
   stage: build
@@ -171,45 +169,10 @@ build-windows-arm64:
     EXT: ".exe"
 
 # #######################
-#        checksums      #
-# #######################
-#
-# SHA256SUMS 单独一个 job：它需要全部 7 个平台的产物，而 upload 只需要
-# 下载已经汇总好的目录。用 needs 把 7 个 build job 都拉进来 —— 多个 job 的
-# dist/ 产物会合并到同一个目录，文件名按平台不同，不会互相覆盖。
-
-checksums:
-  stage: package
-  tags:
-    - linux
-    - docker
-  image: docker.io/library/alpine:3.21
-  needs:
-    - job: build-linux-amd64
-    - job: build-linux-arm64
-    - job: build-darwin-amd64
-    - job: build-darwin-arm64
-    - job: build-windows-amd64
-    - job: build-windows-i386
-    - job: build-windows-arm64
-  script:
-    - cd dist
-    - ls -l
-    - sha256sum keycordon_* > SHA256SUMS
-    - cat SHA256SUMS
-  artifacts:
-    expire_in: 1 week
-    paths:
-      - dist/
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# #######################
 #         upload        #
 # #######################
 #
-# 把二进制和 SHA256SUMS 推到 GitLab 软件包仓库（generic package）。
+# 把二进制推到 GitLab 软件包仓库（generic package）。
 #
 # 版本目录：tag 用 <X.Y.Z>，每个 tag 一个固定目录；分支固定用 nightly，
 # 只有一个目录，每次覆盖 —— 与 Docker 的 nightly 规则一致：nightly 是移动的，
@@ -228,8 +191,16 @@ upload:
     - docker
   # curl 镜像小；Debian 的 golang 镜像只为上传太大
   image: docker.io/curlimages/curl:latest
+  # 多个 build job 的 dist/ 产物会合并到同一个目录，文件名按平台不同、
+  # 不会互相覆盖，所以 upload 一次就能拿到全部 7 个二进制。
   needs:
-    - job: checksums
+    - job: build-linux-amd64
+    - job: build-linux-arm64
+    - job: build-darwin-amd64
+    - job: build-darwin-arm64
+    - job: build-windows-amd64
+    - job: build-windows-i386
+    - job: build-windows-arm64
   script:
     # 版本号在这里重算一次，而不是靠 dotenv artifact 从 build 传下来：
     # dotenv 只沿直接的 needs 传递，多一跳就丢了，重算 4 行更可靠。
@@ -280,7 +251,7 @@ upload:
       set -e
       cd dist
       n=0
-      for f in keycordon_* SHA256SUMS; do
+      for f in keycordon_*; do
         [ -f "$f" ] || continue
         echo "→ $f"
         # --fail-with-body：失败时把服务端的错误信息打出来，便于定位

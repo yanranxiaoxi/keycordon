@@ -168,8 +168,6 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 | windows/386 | `keycordon_<版本>_windows_386.exe` |
 | windows/arm64 | `keycordon_<版本>_windows_arm64.exe` |
 
-外加一个 `SHA256SUMS`。
-
 路径规则与 Docker 标签一致：
 
 | 触发 | 目录 | 文件名 | 性质 |
@@ -189,6 +187,14 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 ```sh
 $ keycordon version
 keycordon 0.0.0-a6e19b65
+```
+
+校验和不用自己发：GitLab 在 **Deploy → Package Registry** 的每个文件旁边直接显示 sha256，GitHub Releases 也会自动生成。脚本里想校验就用 API 取：
+
+```sh
+curl -sS --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/<包ID>/package_files" \
+  | grep -o '"file_name":"[^"]*"\|"file_sha256":"[^"]*"'
 ```
 
 下载地址：
