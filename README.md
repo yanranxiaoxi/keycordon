@@ -137,7 +137,14 @@ cp deploy/quadlet/keycordon.container ~/.config/containers/systemd/
 systemctl --user daemon-reload && systemctl --user start keycordon
 ```
 
-CI（`.gitlab-ci.yml`）在默认分支 push 上产出 `nightly` + `sha-<短哈希>`（仅 Docker Hub），在 `vX.Y.Z` 标签上产出 `<版本>` + `<次版本>` + `latest`（两个仓库）。`latest` 指向最新发布版本，`nightly` 指向默认分支最新的 git 构建。
+CI（`.gitlab-ci.yml`）：
+
+| 触发 | 镜像 | 二进制（软件包仓库） |
+|---|---|---|
+| 默认分支 push | `nightly` + `sha-<短哈希>`（仅 Docker Hub） | 7 个平台，目录 `0.0.0-<短哈希>` |
+| `vX.Y.Z` 标签 | `<版本>` + `<次版本>` + `latest`（两个仓库） | 7 个平台，目录 `<版本>`，固定 |
+
+`latest` 指向最新发布版本，`nightly` 指向默认分支最新的 git 构建。二进制支持 linux/amd64、linux/arm64、darwin/amd64、darwin/arm64、windows/amd64、windows/386、windows/arm64，附 `SHA256SUMS`。详见 [docker/README.md](docker/README.md)。
 
 ## 维护
 

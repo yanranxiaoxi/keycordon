@@ -1,12 +1,15 @@
 stages:
   - test
+  - build
+  - package
+  - upload
   - docker
 
 # 流水线策略：
-#   - 默认分支的 push：nightly 构建（sha-<短哈希> + nightly，只推 Docker Hub）
-#   - 打 vX.Y.Z 标签：release 构建（版本号 + 次版本号 + latest，推两个仓库）
+#   - 默认分支的 push：nightly（可执行文件 + 镜像，都是 nightly）
+#   - 打 vX.Y.Z 标签：release（可执行文件 + 镜像，都是发布版本）
 #   - Merge Request、其它分支的 push 一律不创建流水线，
-#     因此不可能触发任何镜像构建或推送
+#     因此不可能触发任何构建或上传
 workflow:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
@@ -20,6 +23,8 @@ variables:
   GOSUMDB: sum.golang.org
   GOFLAGS: -mod=mod
   CONTAINER_IMAGE_NAME: keycordon
+  # 软件包仓库里的包名
+  PACKAGE_NAME: keycordon
 
 # #######################
 #          test         #
@@ -55,9 +60,195 @@ go-test:
       - eval.log
 
 # #######################
-#         Docker        #
+#         build         #
 # #######################
+#
+# 每个平台一个 job，产物直接按「keycordon_<版本>_<os>_<arch>[.exe]」命名，
+# package 阶段的 checksums 与 upload 靠这个前缀收集。用 .build 作模板，
+# 每个平台只写三个变量。
 
+.build:
+  stage: build
+  tags:
+    - linux
+    - docker
+  image: docker.io/library/golang:1.27
+  cache:
+    key:
+      files:
+        - go.sum
+    paths:
+      - .gocache/
+  # extends 会深合并 variables：各平台的 GOOS/GOARCH/EXT 与这里的 GOCACHE 并存
+  variables:
+    GOCACHE: $CI_PROJECT_DIR/.gocache
+  # 测试不过就不该产出可执行文件
+  needs:
+    - job: go-test
+  script:
+    # tag 用去掉 v 的版本号，分支用 0.0.0-<短哈希>，与 Go 的伪版本习惯一致。
+    # 只影响产物文件名；软件包仓库的目录名由 upload 自己算（见该 job）。
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+      else
+        VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
+      fi
+      echo "版本 ${VERSION}"
+    - mkdir -p dist
+    # -trimpath 去掉本地路径；-buildvcs=false 让没有 git 元数据的浅克隆也能构建
+    # 折成一行：YAML 的续行会把换行和缩进原样交给 shell，多行命令要写成
+    # 单个 script 条目，否则 `go build` 会缺参数。
+    - GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=${VERSION}" -o "dist/keycordon_${VERSION}_${GOOS}_${GOARCH}${EXT}" ./cmd/keycordon
+    # 交叉编译没法运行，但 `go version -m` 会打印二进制里记录的 GOOS/GOARCH，
+    # 借此确认架构写对了（不依赖 file 命令是否存在）
+    - go version -m "dist/keycordon_${VERSION}_${GOOS}_${GOARCH}${EXT}" | grep -E "GOARCH|GOOS"
+    - ls -l dist/
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist/
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+build-linux-amd64:
+  extends: .build
+  variables:
+    GOOS: linux
+    GOARCH: amd64
+    EXT: ""
+
+build-linux-arm64:
+  extends: .build
+  variables:
+    GOOS: linux
+    GOARCH: arm64
+    EXT: ""
+
+build-darwin-amd64:
+  extends: .build
+  variables:
+    GOOS: darwin
+    GOARCH: amd64
+    EXT: ""
+
+build-darwin-arm64:
+  extends: .build
+  variables:
+    GOOS: darwin
+    GOARCH: arm64
+    EXT: ""
+
+build-windows-amd64:
+  extends: .build
+  variables:
+    GOOS: windows
+    GOARCH: amd64
+    EXT: ".exe"
+
+build-windows-i386:
+  extends: .build
+  variables:
+    GOOS: windows
+    GOARCH: "386"
+    EXT: ".exe"
+
+build-windows-arm64:
+  extends: .build
+  variables:
+    GOOS: windows
+    GOARCH: arm64
+    EXT: ".exe"
+
+# #######################
+#        checksums      #
+# #######################
+#
+# SHA256SUMS 单独一个 job：它需要全部 7 个平台的产物，而 upload 只需要
+# 下载已经汇总好的目录。用 needs 把 7 个 build job 都拉进来 —— 多个 job 的
+# dist/ 产物会合并到同一个目录，文件名按平台不同，不会互相覆盖。
+
+checksums:
+  stage: package
+  tags:
+    - linux
+    - docker
+  image: docker.io/library/alpine:3.21
+  needs:
+    - job: build-linux-amd64
+    - job: build-linux-arm64
+    - job: build-darwin-amd64
+    - job: build-darwin-arm64
+    - job: build-windows-amd64
+    - job: build-windows-i386
+    - job: build-windows-arm64
+  script:
+    - cd dist
+    - ls -l
+    - sha256sum keycordon_* > SHA256SUMS
+    - cat SHA256SUMS
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist/
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# #######################
+#         upload        #
+# #######################
+#
+# 把二进制和 SHA256SUMS 推到 GitLab 软件包仓库（generic package）。
+# 版本目录就是 VERSION：每个 tag 一个固定目录，nightly 覆盖同一个
+# 0.0.0-<短哈希> 目录 —— 与 Docker 的 nightly 规则一致：nightly 是移动的，
+# tag 是固定的。
+#
+# 用 CI_JOB_TOKEN，不需要额外配置凭据。
+
+upload:
+  stage: upload
+  tags:
+    - linux
+    - docker
+  # curl 镜像小；Debian 的 golang 镜像只为上传太大
+  image: docker.io/curlimages/curl:latest
+  needs:
+    - job: checksums
+  script:
+    # 版本号在这里重算一次，而不是靠 dotenv artifact 从 build 传下来：
+    # dotenv 只沿直接的 needs 传递，多一跳就丢了，重算 4 行更可靠。
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+      else
+        VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
+      fi
+      echo "版本 ${VERSION}"
+    - PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${VERSION}"
+    - echo "上传到 ${PACKAGE_URL}"
+    # --fail 让 4xx/5xx 直接失败，而不是静默"成功"
+    - |
+      set -e
+      cd dist
+      for f in keycordon_* SHA256SUMS; do
+        [ -f "$f" ] || continue
+        echo "→ $f"
+        curl --fail --silent --show-error \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$f" \
+          "${PACKAGE_URL}/${f}"
+      done
+    - echo "完成：${PACKAGE_URL}"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# #######################
+#         docker        #
+# #######################
+#
 # 构建、冒烟测试、打标签、推送的实际步骤在 scripts/ci-docker.sh 里，
 # 这样同一套逻辑在本地也能跑（CI 之外的调试），两边不会漂移。
 # 两个 job 只在「调用哪个模式」和「什么时候跑」上不同。

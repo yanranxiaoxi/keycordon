@@ -154,6 +154,44 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 
 `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` / `CI_REGISTRY_IMAGE` 由 GitLab 自动注入，不用配。GitLab 自己的 Container Registry 需要在项目里启用：Settings → General → Visibility → Container Registry。
 
+### 可执行文件（软件包仓库）
+
+默认分支 push 与 `vX.Y.Z` 标签还会把 7 个平台的二进制推到 GitLab 的软件包仓库（generic package），不需要额外配置凭据（用 `CI_JOB_TOKEN`）：
+
+| 平台 | 文件名 |
+|---|---|
+| linux/amd64 | `keycordon_<版本>_linux_amd64` |
+| linux/arm64 | `keycordon_<版本>_linux_arm64` |
+| darwin/amd64 | `keycordon_<版本>_darwin_amd64` |
+| darwin/arm64 | `keycordon_<版本>_darwin_arm64` |
+| windows/amd64 | `keycordon_<版本>_windows_amd64.exe` |
+| windows/386 | `keycordon_<版本>_windows_386.exe` |
+| windows/arm64 | `keycordon_<版本>_windows_arm64.exe` |
+
+外加一个 `SHA256SUMS`。
+
+路径规则与 Docker 标签一致：
+
+| 触发 | 版本目录 | 性质 |
+|---|---|---|
+| 默认分支 push | `0.0.0-<短哈希>` | nightly，每次新目录 |
+| `vX.Y.Z` 标签 | `X.Y.Z` | 固定，永不覆盖 |
+
+下载地址：
+
+```text
+${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/keycordon/<版本>/<文件名>
+```
+
+例如：
+
+```sh
+curl -fL --output keycordon.tar.gz \
+  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/1.2.3/keycordon_1.2.3_linux_amd64"
+```
+
+在 GitLab 页面的 **Deploy → Package Registry** 可以直接浏览和下载。
+
 ### 镜像标签策略
 
 | 触发 | 产出标签 | 推到 |
