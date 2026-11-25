@@ -10,6 +10,11 @@ insecure_skip_verify: false
 # Memory is concurrency × these limits: requests run in parallel, so 100
 # concurrent 64 MiB bodies is 6.4 GiB. Size them for your machine, or cap the
 # container, rather than serialising requests.
+#
+# For scale: a 2M-token text request is 3-11 MiB depending on the content
+# (~1.5 bytes/token for Chinese, ~4.0 for English, ~4.8 for JSON). Images are
+# the outlier — a model bills them per tile, so 10 x 4 MiB images is a 53 MiB
+# body for a few thousand tokens. That is what max_body_bytes has to fit.
 limits:
   max_body_bytes: 33554432         # 32 MiB as received; over => 413
   max_decoded_bytes: 67108864      # 64 MiB after Content-Encoding is removed; over => 413

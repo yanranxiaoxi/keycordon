@@ -1214,6 +1214,31 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 
 内存峰值 ≈ 并发请求数 × 单个请求的 body 大小（解压后）。默认 `max_decoded_bytes` 是 64 MiB，100 个并发大请求最坏是 6.4 GiB——所以限制应当来自 `limits` 和操作系统/容器内存上限，而不是把请求串行化。串行化会让一个慢请求拖住所有人的首字节，代价远大于内存。
 
+**一个 token 占几个字节**（决定「2M 上下文 = 多大 body」）：
+
+| 内容 | 字节/token | 2M token 的 body |
+|---|---|---|
+| JSON / 密集代码 | ~4.8 | 10.9 MiB |
+| 英文散文 | ~4.0 | 7.6 MiB |
+| Python / Go | ~3.5 | 7.6 MiB |
+| base64（含 `data:` 图片） | ~3.0（编码决定） | 5.7 MiB |
+| hex 摘要 | ~2.0（编码决定） | 3.8 MiB |
+| 中文 | ~1.5 | 2.9 MiB |
+
+来源：cl100k_base 的切分规律 + 编码本身的膨胀率。`TestDocumentSize` 把这几行钉成测试。
+
+所以**最大的 2M 上下文请求，纯文本不会超过约 11 MiB**。默认 `max_body_bytes: 32 MiB` 留了接近 3 倍余量。
+
+**例外是图片。** 模型按 tile 计价而不是按字节，所以 4 MiB 的 PNG（base64 后 5.6 MiB）只算几千 token。于是一个请求的 body 大小与它的 token 数**无关**：
+
+| 图片数 | body |
+|---|---|
+| 1 × 4 MiB | 5.3 MiB |
+| 10 × 4 MiB | 53.3 MiB |
+| 50 × 4 MiB | 266.7 MiB |
+
+这才是 `max_body_bytes` 真正的约束对象。要接受多图请求就得调大它，同时按 §11.4 的公式重算内存。
+
 ### 11.5 启动与内存
 
 依据附录 A 的实测（i7-14650HX，单 Scanner，`WithPrecompile`）：
