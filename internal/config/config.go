@@ -204,6 +204,24 @@ func (c *Config) Validate() error {
 	if c.Limits.MaxJSONDepth < 8 {
 		errs = append(errs, fmt.Errorf("limits.max_json_depth too small"))
 	}
+	// A negative limit would make every body "too large" (the reader gets a
+	// negative budget) or, worse, disable the check entirely. Zero means
+	// "use the default", which applyDefaults has already filled in.
+	for _, l := range []struct {
+		name string
+		v    int64
+	}{
+		{"limits.max_body_bytes", c.Limits.MaxBodyBytes},
+		{"limits.max_decoded_bytes", c.Limits.MaxDecodedBytes},
+		{"limits.max_response_bytes", c.Limits.MaxResponseBytes},
+	} {
+		if l.v < 0 {
+			errs = append(errs, fmt.Errorf("%s must not be negative", l.name))
+		}
+	}
+	if c.Limits.ScanTimeout < 0 {
+		errs = append(errs, fmt.Errorf("limits.scan_timeout must not be negative"))
+	}
 	return errors.Join(errs...)
 }
 

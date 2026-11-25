@@ -7,11 +7,14 @@ mode: enforce                      # enforce: replace + restore; observe: log fi
 preserve_host: false
 insecure_skip_verify: false
 
+# Memory is concurrency × these limits: requests run in parallel, so 100
+# concurrent 64 MiB bodies is 6.4 GiB. Size them for your machine, or cap the
+# container, rather than serialising requests.
 limits:
-  max_body_bytes: 33554432         # 32 MiB as received
-  max_decoded_bytes: 67108864      # 64 MiB after Content-Encoding is removed
+  max_body_bytes: 33554432         # 32 MiB as received; over => 413
+  max_decoded_bytes: 67108864      # 64 MiB after Content-Encoding is removed; over => 413
   max_response_bytes: 67108864     # larger non-streaming responses are passed through unrestored
-  max_json_depth: 128
+  max_json_depth: 128              # nesting, including JSON inside strings; over => 400
   scan_timeout: 2s                 # exceeded => 503, the request is never forwarded unscanned
 
 protocols:
