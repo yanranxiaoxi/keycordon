@@ -172,10 +172,19 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 
 路径规则与 Docker 标签一致：
 
-| 触发 | 版本目录 | 性质 |
-|---|---|---|
-| 默认分支 push | `0.0.0-<短哈希>` | nightly，每次新目录 |
-| `vX.Y.Z` 标签 | `X.Y.Z` | 固定，永不覆盖 |
+| 触发 | 版本目录 | 文件名前缀 | 性质 |
+|---|---|---|---|
+| 默认分支 push | `nightly` | `keycordon_nightly_*` | 固定目录，每次**删除旧包后重传** |
+| `vX.Y.Z` 标签 | `X.Y.Z` | `keycordon_<版本>_*` | 固定目录，永不覆盖 |
+
+仓库里因此最多只有「各发布版本 + 一个 nightly」，不会因为每次提交都多一个目录而无限增长。
+
+nightly 的二进制文件名带 `nightly`，但编进二进制的版本仍是 `0.0.0-<短哈希>`，`keycordon version` 能看出确切来源：
+
+```sh
+$ keycordon version
+keycordon 0.0.0-a6e19b65
+```
 
 下载地址：
 
@@ -186,9 +195,16 @@ ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/keycordon/<版本>/<
 例如：
 
 ```sh
-curl -fL --output keycordon.tar.gz \
+# 最新发布版本
+curl -fL -o keycordon \
   "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/1.2.3/keycordon_1.2.3_linux_amd64"
+
+# nightly
+curl -fL -o keycordon \
+  "https://gitlab.soraharu.com/api/v4/projects/<项目ID>/packages/generic/keycordon/nightly/keycordon_nightly_linux_amd64"
 ```
+
+`nightly` 目录每次构建都会被替换，所以它永远指向默认分支最新一次的构建。
 
 在 GitLab 页面的 **Deploy → Package Registry** 可以直接浏览和下载。
 

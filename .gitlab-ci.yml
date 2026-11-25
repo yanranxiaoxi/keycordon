@@ -86,23 +86,27 @@ go-test:
   needs:
     - job: go-test
   script:
-    # tag 用去掉 v 的版本号，分支用 0.0.0-<短哈希>，与 Go 的伪版本习惯一致。
-    # 只影响产物文件名；软件包仓库的目录名由 upload 自己算（见该 job）。
+    # 两个版本号：
+    #   BINARY_VERSION  编进二进制，`keycordon version` 能看到确切是哪次构建
+    #   PACKAGE_VERSION 软件包仓库的目录名与文件名前缀
+    # nightly 的包目录固定叫 nightly，每次覆盖同一个包，不会越积越多。
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        VERSION="${CI_COMMIT_TAG#v}"
+        BINARY_VERSION="${CI_COMMIT_TAG#v}"
+        PACKAGE_VERSION="${BINARY_VERSION}"
       else
-        VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
+        BINARY_VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
+        PACKAGE_VERSION="nightly"
       fi
-      echo "版本 ${VERSION}"
+      echo "二进制版本 ${BINARY_VERSION}，软件包版本 ${PACKAGE_VERSION}"
     - mkdir -p dist
     # -trimpath 去掉本地路径；-buildvcs=false 让没有 git 元数据的浅克隆也能构建
     # 折成一行：YAML 的续行会把换行和缩进原样交给 shell，多行命令要写成
     # 单个 script 条目，否则 `go build` 会缺参数。
-    - GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=${VERSION}" -o "dist/keycordon_${VERSION}_${GOOS}_${GOARCH}${EXT}" ./cmd/keycordon
+    - GOOS=${GOOS} GOARCH=${GOARCH} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=${BINARY_VERSION}" -o "dist/keycordon_${PACKAGE_VERSION}_${GOOS}_${GOARCH}${EXT}" ./cmd/keycordon
     # 交叉编译没法运行，但 `go version -m` 会打印二进制里记录的 GOOS/GOARCH，
     # 借此确认架构写对了（不依赖 file 命令是否存在）
-    - go version -m "dist/keycordon_${VERSION}_${GOOS}_${GOARCH}${EXT}" | grep -E "GOARCH|GOOS"
+    - go version -m "dist/keycordon_${PACKAGE_VERSION}_${GOOS}_${GOARCH}${EXT}" | grep -E "GOARCH|GOOS"
     - ls -l dist/
   artifacts:
     expire_in: 1 week
@@ -111,6 +115,10 @@ go-test:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# nightly 的产物文件名里带 nightly（keycordon_nightly_linux_amd64），
+# 每次覆盖同一个包；编进二进制的版本仍是 0.0.0-<短哈希>，`keycordon version`
+# 能看出确切来源。
 
 build-linux-amd64:
   extends: .build
@@ -201,9 +209,14 @@ checksums:
 # #######################
 #
 # 把二进制和 SHA256SUMS 推到 GitLab 软件包仓库（generic package）。
-# 版本目录就是 VERSION：每个 tag 一个固定目录，nightly 覆盖同一个
-# 0.0.0-<短哈希> 目录 —— 与 Docker 的 nightly 规则一致：nightly 是移动的，
-# tag 是固定的。
+#
+# 版本目录：tag 用 <X.Y.Z>，每个 tag 一个固定目录；分支固定用 nightly，
+# 只有一个目录，每次覆盖 —— 与 Docker 的 nightly 规则一致：nightly 是移动的，
+# tag 是固定的。这样仓库里最多只有「各发布版本 + 一个 nightly」，
+# 不会因为每次提交都多一个目录而无限增长。
+#
+# nightly 的二进制文件名也带 nightly（keycordon_nightly_linux_amd64），
+# 但编进二进制的版本仍是 0.0.0-<短哈希>，`keycordon version` 能看到确切来源。
 #
 # 用 CI_JOB_TOKEN，不需要额外配置凭据。
 
@@ -219,14 +232,38 @@ upload:
   script:
     # 版本号在这里重算一次，而不是靠 dotenv artifact 从 build 传下来：
     # dotenv 只沿直接的 needs 传递，多一跳就丢了，重算 4 行更可靠。
+    # 规则与 .build 一致：tag 用版本号，分支固定用 nightly。
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        VERSION="${CI_COMMIT_TAG#v}"
+        PACKAGE_VERSION="${CI_COMMIT_TAG#v}"
       else
-        VERSION="0.0.0-${CI_COMMIT_SHORT_SHA}"
+        PACKAGE_VERSION="nightly"
       fi
-      echo "版本 ${VERSION}"
-    - PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${VERSION}"
+      echo "软件包版本 ${PACKAGE_VERSION}"
+    - PACKAGE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/${PACKAGE_NAME}/${PACKAGE_VERSION}"
+    # nightly 要真正被替换掉：GitLab 默认把同名文件追加进已有包，旧文件会和
+    # 新文件一起留着，体积照样长。删掉整个 nightly 包再上传，一次运行只会留下
+    # 一套文件。发布版本不删：各 tag 目录互不相干，且 tag 内容不会变。
+    - |
+      set -e
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        echo "发布版本：保留已有包"
+      else
+        echo "nightly：删除旧的 nightly 包"
+        pkgs="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages"
+        # 包对象以 {"id":N,"name":"<包名>" 开头；嵌套的 pipeline/user 对象
+        # 第二个字段不是 name，不会误匹配。只用 grep/cut，不需要 jq。
+        ids=$(curl --silent --show-error --fail \
+          --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          "${pkgs}?package_type=generic&package_name=${PACKAGE_NAME}&package_version=${PACKAGE_VERSION}&per_page=100" \
+          | grep -o '{"id":[0-9]*,"name":"[^"]*"' | grep -o '[0-9]*')
+        for id in $ids; do
+          echo "  删除包 ${id}"
+          curl --silent --show-error --fail --request DELETE \
+            --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            "${pkgs}/${id}"
+        done
+      fi
     - echo "上传到 ${PACKAGE_URL}"
     # --fail 让 4xx/5xx 直接失败，而不是静默"成功"
     - |
