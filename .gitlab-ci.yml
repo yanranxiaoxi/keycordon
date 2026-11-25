@@ -253,15 +253,23 @@ upload:
         pkgs="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages"
         # 包对象以 {"id":N,"name":"<包名>" 开头；嵌套的 pipeline/user 对象
         # 第二个字段不是 name，不会误匹配。只用 grep/cut，不需要 jq。
-        ids=$(curl --silent --show-error --fail \
+        response=$(curl --silent --show-error --fail-with-body \
           --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${pkgs}?package_type=generic&package_name=${PACKAGE_NAME}&package_version=${PACKAGE_VERSION}&per_page=100" \
-          | grep -o '{"id":[0-9]*,"name":"[^"]*"' | grep -o '[0-9]*')
+          "${pkgs}?package_type=generic&package_name=${PACKAGE_NAME}&package_version=${PACKAGE_VERSION}&per_page=100") \
+          || { echo "查询已有 nightly 包失败：${response}" >&2; exit 1; }
+        # 第一次运行时还没有 nightly 包，grep 匹配不到会返回 1；
+        # 在 set -e 下这会直接中止整个 job，所以要吞掉这个返回码。
+        ids=$(printf '%s' "$response" \
+          | grep -o '{"id":[0-9]*,"name":"[^"]*"' | grep -o '[0-9]*' || true)
+        if [ -z "$ids" ]; then
+          echo "  没有旧的 nightly 包，跳过"
+        fi
         for id in $ids; do
           echo "  删除包 ${id}"
-          curl --silent --show-error --fail --request DELETE \
+          body=$(curl --silent --show-error --fail-with-body --request DELETE \
             --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-            "${pkgs}/${id}"
+            "${pkgs}/${id}") \
+            || { echo "删除包 ${id} 失败：${body}" >&2; exit 1; }
         done
       fi
     - echo "上传到 ${PACKAGE_URL}"
@@ -269,14 +277,20 @@ upload:
     - |
       set -e
       cd dist
+      n=0
       for f in keycordon_* SHA256SUMS; do
         [ -f "$f" ] || continue
         echo "→ $f"
-        curl --fail --silent --show-error \
+        # --fail-with-body：失败时把服务端的错误信息打出来，便于定位
+        curl --fail-with-body --silent --show-error \
           --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
           --upload-file "$f" \
           "${PACKAGE_URL}/${f}"
+        n=$((n + 1))
       done
+      # 一个文件都没上传就说明 artifacts 没下来或文件名对不上，应当报错
+      [ "$n" -gt 0 ] || { echo "dist/ 里没有可上传的文件" >&2; exit 1; }
+      echo "已上传 ${n} 个文件"
     - echo "完成：${PACKAGE_URL}"
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
