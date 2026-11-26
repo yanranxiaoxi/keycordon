@@ -195,9 +195,19 @@ type span struct {
 }
 
 func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller, counts map[string]int) ([]jsonx.Edit, error) {
+	// A text that has already been sent goes again exactly as it went (design
+	// 7.8). Its spans are frozen in the sent memo, so detection can be skipped
+	// for it entirely — an agent re-sends its whole history every turn, and
+	// that history is most of the request.
+	spans := make([][]span, len(units))
+	frozen := make([]bool, len(units))
 	var texts []string
 	var idx []int
 	for i, u := range units {
+		if f, ok := rw.Sent.Get(c.ID(), rw.Upstream, u.prefix, u.text); ok {
+			spans[i], frozen[i] = fromVaultSpans(f), true
+			continue
+		}
 		if !u.known {
 			texts = append(texts, u.prefix+u.text)
 			idx = append(idx, i)
@@ -217,9 +227,10 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 	// placeholder write marks the caller's known-value index dirty, and
 	// rebuilding that index per unit is quadratic in the number of secrets
 	// (1000 keys took 1.8 s instead of 6 ms).
-	spans := make([][]span, len(units))
 	for i, u := range units {
-		spans[i] = rw.spans(u, found[i], c)
+		if !frozen[i] {
+			spans[i] = rw.spans(u, found[i], c)
+		}
 	}
 	var edits []jsonx.Edit
 	for i, u := range units {
@@ -243,9 +254,6 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 // text left the machine never rewrites it. Only a text never sent before is
 // decided afresh.
 func (rw *Rewriter) spans(u *unit, hits []detector.Hit, c *vault.Caller) []span {
-	if frozen, ok := rw.Sent.Get(c.ID(), rw.Upstream, u.prefix, u.text); ok {
-		return fromVaultSpans(frozen)
-	}
 	var out []span
 	p := len(u.prefix)
 	for _, h := range hits {

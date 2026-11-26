@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/detector"
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/protocol"
@@ -519,5 +520,57 @@ func TestPromptOnlyExtraAdapters(t *testing.T) {
 	res, _ := newRW(false).JSON(context.Background(), a, []byte(`{"id":"ghp_NqVwYS81VP7Hb1DX8pQ2mZ7xL4kR9tWcB3vE","model":"m","commands":{"search_query":[{"q":"x"}]}}`), caller())
 	if strings.Contains(string(res.Body), "<SECRET_") {
 		t.Fatalf("frozen id rewritten: %s", res.Body)
+	}
+}
+
+// An agent re-sends its whole history every turn. That history has already
+// been sent, so its spans are frozen and detection must not run on it again:
+// only the new messages cost anything.
+func TestRepeatedHistoryIsCheap(t *testing.T) {
+	setup(t)
+	a := adapter(t, "/v1/chat/completions")
+	c := caller()
+	rw := newRW(true)
+	ctx := context.Background()
+
+	// Take a conversation and grow it one message per turn, the way an agent
+	// does. Every earlier message has already been sent.
+	var req struct {
+		Model    string            `json:"model"`
+		Messages []json.RawMessage `json:"messages"`
+	}
+	json.Unmarshal(chatBody(16000, 50), &req)
+
+	turn := func() float64 {
+		body, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		res, err := rw.JSON(ctx, a, body, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Count() == 0 {
+			t.Fatal("expected replacements")
+		}
+		return float64(time.Since(start).Microseconds()) / 1000
+	}
+
+	first := turn()
+	var later []float64
+	for i := 0; i < 3; i++ {
+		req.Messages = append(req.Messages,
+			json.RawMessage(`{"role":"user","content":"a new turn with no secrets in it"}`))
+		later = append(later, turn())
+	}
+	// The first turn pays for detection over the whole history; later turns
+	// only pay for the new message, because the rest is frozen in the memo.
+	t.Logf("first %.1f ms, later %v", first, later)
+	for _, l := range later {
+		if l > first/2 {
+			t.Errorf("a repeated history cost %.1f ms against %.1f ms on the first turn; "+
+				"detection should be skipped for frozen text", l, first)
+		}
 	}
 }
