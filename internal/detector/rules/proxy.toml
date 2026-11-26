@@ -131,6 +131,61 @@ matchesAny(finding["secret"], [
   input = "password: ${DB_PASS}"
   expect = []
 
+# Provider-prefixed keys: a vendor prefix, then a random alphanumeric body.
+# The bundled rules know individual vendors (sk-proj-, sk-ant-, sk-or-v1-,
+# sk-api-, sk-lf-, ...), but a gateway mints keys its own way: DeepSeek,
+# Moonshot and most OpenAI-compatible resellers use sk- and a run of lowercase
+# alphanumerics. bare-random-token cannot see those, because such a body also
+# matches its hyphenated-identifier exclusion (sk-9f8e7d6c reads as a kebab
+# case name); only a rule keyed on the prefix can tell the two apart.
+[[rules]]
+id = "provider-prefixed-key"
+description = "API key with a provider prefix and a random body"
+confidence = "medium"
+specificity = -100
+regex = '''\b(?:sk|pk|rk|ak|nvapi|gsk)[_-][A-Za-z0-9]{20,250}'''
+keywords = ["sk-", "sk_", "pk-", "pk_", "rk-", "ak-", "nvapi-", "gsk_"]
+filter = '''
+!matchesAny(finding["secret"], [`[0-9]`])
+|| entropy(finding["secret"]) <= 3.0
+|| tokenRatio(finding["secret"]) >= 2.2
+'''
+
+  [[rules.tests]]
+  name = "lowercase hex body"
+  input = "key sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5 please"
+  expect = [{ secret = "sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5" }]
+
+  [[rules.tests]]
+  name = "lowercase alphanumeric body"
+  input = "DEEPSEEK_API_KEY=sk-d4b21d6d8f3e4a5b6c7d8e9f0a1b2c3d"
+  expect = [{ secret = "sk-d4b21d6d8f3e4a5b6c7d8e9f0a1b2c3d" }]
+
+  [[rules.tests]]
+  name = "underscore separator"
+  input = "token gsk_2f9bfd7a1c3e5b7d9f0a2c4e6b8d0f1a here"
+  expect = [{ secret = "gsk_2f9bfd7a1c3e5b7d9f0a2c4e6b8d0f1a" }]
+
+  [[rules.tests]]
+  name = "hyphenated identifier"
+  input = "the sk-learn-course-docker-basics lesson"
+  expect = []
+
+  [[rules.tests]]
+  name = "repeated letter"
+  input = "the sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa value"
+  expect = []
+
+  [[rules.tests]]
+  name = "short body"
+  input = "sk-abc123def456"
+  expect = []
+
+  [[rules.tests]]
+  name = "vendored prefix stays with its own rule"
+  input = "key sk-proj-4fGh7JkL9mN2pQ5rS8tU1vW3xY6zA0bC2dE4fG6hI8jK0lM trims"
+  expect = []
+
 # Random-looking tokens with no surrounding context. A string counts as random
 # when it is long, contains a digit, has high Shannon entropy and tokenizes
 # poorly (few characters per BPE token). Known structured values such as
@@ -140,7 +195,7 @@ id = "bare-random-token"
 description = "High-entropy token without assignment context"
 confidence = "medium"
 specificity = -200
-regex = '''(?:^|[\s"'`(\[{<,;:=])([A-Za-z0-9_\-+/.~!@#$%^&*?]{16,256}={0,2})(?:$|[\s"'`)\]}>,;])'''
+regex = '''(?:^|[\s"'`(\[{<,;:=])?([A-Za-z0-9_\-+/.~!@#$%^&*?]{16,256}={0,2})(?:$|[\s"'`)\]}>,;])'''
 valueGroup = 1
 keywords = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
 filter = '''
@@ -238,6 +293,20 @@ len(finding["secret"]) < 16
   name = "random base64 without hash context"
   input = "secret YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E= here"
   expect = [{ secret = "YKkCB+E5PXc0xmLfMrWbfNht8vG9Re97IHSWZk/Lk8E=" }]
+
+  # A rule's match ends at its trailing boundary, and a left boundary that must
+  # be consumed would eat the separator the next token needs. Two keys pasted
+  # with a single space between them used to yield one hit; the left boundary is
+  # optional so every token is anchored by its own right boundary.
+  [[rules.tests]]
+  name = "two adjacent tokens"
+  input = "Xk9fQ2mZ7pL4vR8tY6bN3cW5dE1gH0jS Tq4wEr7yUi1oPa3sDf5gHj8kLz2xCv9bN"
+  expect = [{ secret = "Xk9fQ2mZ7pL4vR8tY6bN3cW5dE1gH0jS" }, { secret = "Tq4wEr7yUi1oPa3sDf5gHj8kLz2xCv9bN" }]
+
+  [[rules.tests]]
+  name = "two adjacent tokens on separate lines"
+  input = "Xk9fQ2mZ7pL4vR8tY6bN3cW5dE1gH0jS\nTq4wEr7yUi1oPa3sDf5gHj8kLz2xCv9bN"
+  expect = [{ secret = "Xk9fQ2mZ7pL4vR8tY6bN3cW5dE1gH0jS" }, { secret = "Tq4wEr7yUi1oPa3sDf5gHj8kLz2xCv9bN" }]
 
 # Credentials introduced in prose: "the password is X", "token: Y".
 # The defaults only match code-style assignments, so a password mentioned by

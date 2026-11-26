@@ -280,6 +280,58 @@
         "password\":\"cGFzc3dvcmQ9aHVudGVyMi1idXQtbG9uZ2Vy"
       ],
       "keep": []
+    },
+    {
+      "id": "gateway-sk-lowercase",
+      "text": "DEEPSEEK_API_KEY=sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5",
+      "want": [
+        "sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5"
+      ],
+      "keep": []
+    },
+    {
+      "id": "gateway-sk-in-prose",
+      "text": "the gateway wants sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5 for that model",
+      "want": [
+        "sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5"
+      ],
+      "keep": [
+        "model"
+      ]
+    },
+    {
+      "id": "two-adjacent-keys",
+      "text": "sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5 sk-a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "want": [
+        "sk-9f8e7d6c1a2b3c4d5e6f708192a3b4c5",
+        "sk-a1b2c3d4e5f60718293a4b5c6d7e8f90"
+      ],
+      "keep": []
+    },
+    {
+      "id": "sk-learn-identifier",
+      "text": "pip install scikit-learn then run the sk-learn-docker-basics lesson",
+      "want": [],
+      "keep": [
+        "sk-learn-docker-basics",
+        "scikit-learn"
+      ]
+    },
+    {
+      "id": "repeated-letter-prefix",
+      "text": "the sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa placeholder",
+      "want": [],
+      "keep": [
+        "sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "id": "bare-md5-hash",
+      "text": "digest 9f8e7d6c1a2b3c4d5e6f708192a3b4c5 logged",
+      "want": [],
+      "keep": [
+        "9f8e7d6c1a2b3c4d5e6f708192a3b4c5"
+      ]
     }
   ]
 }

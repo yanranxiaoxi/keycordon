@@ -59,3 +59,4 @@ vault:
 log:
   level: info                      # debug | info | warn | error
   format: text                     # text | json
+  usage: false                     # log the upstream's token accounting (input / cached / output) per response

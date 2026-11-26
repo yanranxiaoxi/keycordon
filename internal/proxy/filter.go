@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/protocol"
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/restore"
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/rewrite"
+	"gitlab.soraharu.com/XiaoXi/keycordon/internal/usage"
 	"gitlab.soraharu.com/XiaoXi/keycordon/internal/vault"
 )
 
@@ -97,7 +99,7 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, a *protocol.Adap
 	mt, _, _ := mime.ParseMediaType(ct)
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Limits.ScanTimeout)
 	defer cancel()
-	res := rewrite.Result{Body: body}
+	res := rewrite.Result{Body: body, Replaced: map[string]int{}, InjectReason: rewrite.InjectEmptyBody}
 	switch {
 	case len(bytes.TrimSpace(body)) == 0:
 	case a.Multipart && mt == "multipart/form-data":
@@ -135,14 +137,37 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, a *protocol.Adap
 	r.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(out)), nil }
 	r.ContentLength = int64(len(out))
 	r.Header.Set("Content-Length", strconv.Itoa(len(out)))
-	if n := res.Count(); n > 0 || s.cfg.Mode == "observe" {
-		s.log.Info("request filtered", "adapter", a.ID, "caller", shortID(callerID), "mode", s.cfg.Mode,
-			"replaced", n, "rules", res.Replaced, "injected", res.Injected, "scan_ms", scanTime.Milliseconds())
+	// Units, Frozen and InjectReason are what makes a quiet log line
+	// explainable: a request that replaced nothing still shows whether the
+	// scan happened (units), how much of the history was answered from the
+	// sent memo (frozen) and why the notice was or was not added.
+	attrs := []any{
+		"adapter", a.ID, "caller", shortID(callerID), "mode", s.cfg.Mode,
+		"replaced", res.Count(), "rules", res.Replaced, "injected", res.Injected,
+		"inject", res.InjectReason, "units", res.Units, "frozen", res.Frozen,
+		"body_bytes", len(raw), "scan_ms", scanTime.Milliseconds(),
+	}
+	if worthInfo(s.cfg.Mode, res) {
+		s.log.Info("request filtered", attrs...)
 	} else {
-		s.log.Debug("request filtered", "adapter", a.ID, "caller", shortID(callerID), "injected", res.Injected,
-			"scan_ms", scanTime.Milliseconds())
+		s.log.Debug("request filtered", attrs...)
 	}
 	s.filtered.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, st)))
+}
+
+// worthInfo decides whether a filtered request deserves a line at info
+// level. A request that replaced nothing is normally quiet, but a notice
+// that was deliberately not added is exactly what a user debugging
+// "injected: false" needs to see.
+func worthInfo(mode string, res rewrite.Result) bool {
+	if res.Count() > 0 || mode == "observe" || res.Injected {
+		return true
+	}
+	switch res.InjectReason {
+	case rewrite.InjectPresent, rewrite.InjectServerState, rewrite.InjectNoPlace:
+		return true
+	}
+	return false
 }
 
 func shortID(id string) string {
@@ -154,7 +179,20 @@ func shortID(id string) string {
 
 func (s *Server) modifyResponse(resp *http.Response) error {
 	st, _ := resp.Request.Context().Value(ctxKey{}).(*reqState)
-	if st == nil || !st.restore || resp.Body == nil || resp.Body == http.NoBody {
+	if st == nil || resp.Body == nil || resp.Body == http.NoBody {
+		return nil
+	}
+	if s.cfg.Log.Usage {
+		resp.Body = usage.Watch(resp.Body, func(i usage.Info) {
+			if i.Empty() {
+				return
+			}
+			s.log.Info("upstream usage", "caller", shortID(st.caller.ID()), "adapter", st.a.ID,
+				"model", i.Model, "input_tokens", i.InputTokens, "cached_tokens", i.CachedTokens,
+				"output_tokens", i.OutputTokens, "cache_hit", fmt.Sprintf("%.1f%%", 100*i.HitRate()))
+		})
+	}
+	if !st.restore {
 		return nil
 	}
 	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {

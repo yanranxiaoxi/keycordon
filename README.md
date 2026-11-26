@@ -115,6 +115,45 @@ limits:
 
 自定义或覆盖协议适配器：在 `~/.config/keycordon/protocols/` 放 YAML 文件，格式与 [internal/protocol/protocols/](internal/protocol/protocols/) 中的内置适配器相同。ID 相同时覆盖内置适配器。
 
+## 日志
+
+每个被过滤的请求打一行 `request filtered`，字段固定：
+
+| 字段 | 含义 |
+|---|---|
+| `replaced` / `rules` | 替换次数，按规则 ID 分组（`known` = 命中已知密钥回扫） |
+| `injected` / `inject` | 是否注入了占位符说明；`inject` 说明原因，见下表 |
+| `units` | 本次扫描的字符串数（JSON 里的叶子字符串，工具调用参数里的 JSON 会展开） |
+| `frozen` | 其中有多少条走上一次已发送时的形态、完全跳过检测（设计 §7.8 的 memo） |
+| `body_bytes` | 请求体大小（未解压的线上字节数） |
+| `scan_ms` | 扫描 + 改写耗时，不含上游 |
+
+`inject` 的取值：
+
+| 值 | 含义 |
+|---|---|
+| `added` | 本次注入了说明（对应 `injected: true`） |
+| `already_present` | 请求体里已经有 `[keycordon/1]`（客户端回放了上一轮的 system，或串联了第二个 keycordon） |
+| `server_state` | Responses API 的 `previous_response_id` 续接，说明已在服务端历史里 |
+| `not_needed` | `inject_always: false` 且本轮没有替换、vault 也是空的 |
+| `disabled` | `request.inject_instruction: false` |
+| `no_target` | 该端点没有 system 提示可写（生图、embedding、TTS 等） |
+| `no_place` | 端点的注入目标存在但形态不匹配（例如 `system` 不是字符串或块数组） |
+| `empty_body` | 请求体为空，没有扫描 |
+
+`replaced: 0` 的请求平时只打 debug 级日志；一旦出现 `already_present`、`server_state`、`no_place` 这类「本该注入却没注入」的情况会提升到 info 级——排查 `injected: false` 时不需要打开 debug。
+
+`log.usage: true` 时再打一行 `upstream usage`，把上游报的 token 账目摘出来（默认关闭）：
+
+```json
+{"msg":"upstream usage","caller":"ca1c2450e","adapter":"openai-chat","model":"gpt-4o",
+ "input_tokens":2000,"cached_tokens":1920,"output_tokens":51,"cache_hit":"96.0%"}
+```
+
+容器里配置文件是打进镜像的，想临时开启不必重建镜像：`KEYCORDON_LOG_LEVEL=debug`、`KEYCORDON_LOG_USAGE=1`（环境变量优先于配置文件）。
+
+三个数字来自各家的不同字段：OpenAI Chat 的 `prompt_tokens` / `prompt_tokens_details.cached_tokens`、Responses 的 `input_tokens` / `input_tokens_details.cached_tokens`、Anthropic 的 `input_tokens` / `cache_read_input_tokens`、Gemini 的 `usageMetadata.promptTokenCount` / `cachedContentTokenCount`。流式响应从各个 SSE 事件里累加，所以 `cached_tokens` 为 0 就意味着这一轮缓存没命中。只读不写，响应字节不受影响。
+
 ## 实测兼容性
 
 已用真实上游（小米 MiMo，`https://api.xiaomimimo.com/v1` + `mimo-v2.6-flash`）跑通下列场景，输出均为「上游只看到占位符，客户端拿回原文」：
@@ -139,10 +178,12 @@ limits:
 1. 散文里提到的密码原本完全漏检（「数据库密码是 hunter2-but-longer」「the password is pa55word-9x」）。原因和取舍见 [docs/design.md](docs/design.md) 4.4 与实现说明第 11 条。
 2. 迟到的已知值会重写已发送的历史，把前缀缓存打穿（上游早已见过明文，改写没有安全收益）。机制见 [docs/design.md](docs/design.md) §7.8。
 3. 规则靠上下文命中时也会命中代码、路径、版本号和过期时间（`PRIVATE_KEY_PATH=~/.ssh/id_ed25519`、`access_token = get_access_token_v2`、`jsonwebtoken = "9.2.0-beta1"` 等）。现在由 `internal/veto` 否决，见 [docs/design.md](docs/design.md) §4.3.1。
+4. 网关自己签发的 `sk-` + 32 位小写字母数字（DeepSeek、Moonshot 及多数 OpenAI 兼容中转）完全漏检：这种正文同时满足 `bare-random-token` 的连字符标识符排除（`sk-9f8e7d6c` 读起来像一个 kebab-case 名字）。现在由只看前缀的 `provider-prefixed-key` 规则命中，见 [docs/design.md](docs/design.md) §4.4。
+5. 两个密钥挨着写、中间只有一个分隔符时只能命中前一个：`bare-random-token` 的尾边界会把那个分隔符吃掉，第二个 token 就失去了起始锚点。左边界改为可选后每个 token 由自己的右边界锚定。
 
 ## 检测质量
 
-`internal/detector/testdata/eval.json` 是回归评估集：每条用例是一个 agent 会发出的文本，带「必须替换」和「必须原样保留」两组值。当前 33 条用例，precision 1.000 / recall 1.000，CI 门槛均为 0.95。新增规则或调整 filter 时先加用例。
+`internal/detector/testdata/eval.json` 是回归评估集：每条用例是一个 agent 会发出的文本，带「必须替换」和「必须原样保留」两组值。当前 40 条用例，precision 1.000 / recall 1.000，CI 门槛均为 0.95。新增规则或调整 filter 时先加用例。
 
 与同类工具 magpie 的对照、可借鉴项与取舍见 [docs/magpie-review.md](docs/magpie-review.md)。
 

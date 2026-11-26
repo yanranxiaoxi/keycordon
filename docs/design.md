@@ -346,6 +346,7 @@ disabledRules = []
 | `compound-env-secret` | `POSTGRES_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`SMTP_PASSWORD=` 等复合变量名 | key 允许任意前后缀：`[A-Z0-9_]*(?:PASSWORD\|PASSWD\|PWD\|SECRET\|TOKEN\|API_?KEY\|CREDENTIAL\|PRIVATE_KEY)[A-Z0-9_]*` |
 | `db-uri-anon-user` | `redis://:pass@host` | 用户名为空的连接串 |
 | `openai-project-key` | `sk-proj-…` / `sk-svcacct-…` 新格式 | 默认规则只认含 `T3BlbkFJ` 的旧格式，新格式靠 generic 规则，需要 `KEY=` 上下文 |
+| `provider-prefixed-key` | `sk-` / `pk-` / `rk-` / `ak-` / `nvapi-` / `gsk_` 后接随机正文 | 只看前缀，不依赖赋值上下文。网关自签的 `sk-` + 32 位小写字母数字（DeepSeek、Moonshot、多数中转）同时满足 `bare-random-token` 的连字符标识符排除，会整条漏检；前缀规则不受那条排除影响 |
 | `yaml-netrc-secret` | `password: xxx`（无 `=`）、`.netrc` 的 `password xxx` | 行首锚定 |
 | `nl-credential-mention` | 英文散文里的凭据：「the password is X」「token: Y」 | 默认规则只认代码式赋值，聊天里提到的密码会整段漏掉（实测 MiMo 测试中发现） |
 | `nl-credential-mention-cjk` | 中文散文里的凭据：「数据库密码是 X」「口令：Y」「秘钥 Z」 | 必须单独一条：betterleaks 的 `keywords` 只能是文本中出现的 ASCII 小写字面量，中文标签无法作为关键字，只能写无关键字规则 |
@@ -398,7 +399,7 @@ id = "bare-random-token"
 description = "High-entropy token without assignment context"
 confidence = "medium"
 specificity = -200            # 比默认规则低，其他规则先认领
-regex = '''(?:^|[\s"'`(\[{<,;:=])([A-Za-z0-9_\-+/=.]{16,128})(?:$|[\s"'`)\]}>,;])'''
+regex = '''(?:^|[\s"'`(\[{<,;:=])?([A-Za-z0-9_\-+/=.]{16,128})(?:$|[\s"'`)\]}>,;])'''
 valueGroup = 1
 keywords = ["0","1","2","3","4","5","6","7","8","9"]
 filter = '''
@@ -419,6 +420,8 @@ len(finding["secret"]) < 16
 ])
 '''
 ```
+
+左边界写成可选（`(?:…)?`）而不是必需：一次匹配会**消费**边界字符，两个密钥之间只有一个分隔符时（`A B`、换行、`A,B`），必需的左边界会把那个分隔符吃掉，第二个 token 失去了起始锚点，只能命中前一个。右边界保留必需，每个 token 由自己的右边界锚定。
 
 判定依据是 BPE token 比率（字符数 / cl100k token 数）：随机串约 1.0–2.0，人写的标识符和文字约 2.5–8。比 Shannon 熵更能区分 git SHA、`VAULT_KEY_SOURCE` 这类「高熵但不是密钥」的串。附录 A 的离线评测中，这套「结构白名单 + token 比率 + 熵」组合达到 precision 0.970 / recall 0.963。
 
@@ -447,7 +450,7 @@ len(finding["secret"]) < 16
 - `keep`：必须原样保留的值（误报 → precision 下降）。
 - 两组都为空的值不参与评分。
 
-`TestEvalCorpus` 计算 precision / recall，门槛都是 **0.95**。当前 33 条用例：precision 1.000、recall 1.000。
+`TestEvalCorpus` 计算 precision / recall，门槛都是 **0.95**。当前 40 条用例：precision 1.000、recall 1.000。
 
 用例来源是「用户报告的错误遮蔽」——每一条 `keep` 都对应一次真实的误报（见 4.3.1 的表）。新增规则或调整 filter 时，先加用例再改规则。
 
@@ -868,6 +871,7 @@ injected = caller.vault 非空（历史中曾有占位符） 或 本轮发生替
 - 单元测试：对同一会话连续构造 3 轮请求（第 2、3 轮把上一轮响应拼进历史），断言第 2 轮与第 3 轮的请求在「第 1 轮结束位置」之前的字节完全一致。
 - 单元测试：对 7.2 表里每一行写一个反例（先让它失败，再验证对策生效）。
 - 集成测试：用固定主密钥，模拟代理重启，断言重启前后同一密钥的占位符相同；且注入说明的决策不因重启而翻转（7.4）。
+- 日志：`log.usage: true` 时每个响应多打一行 `upstream usage`，把 `input_tokens` / `cached_tokens` / `output_tokens` 和命中率摊开（实现在 `internal/usage`，只读不写，不改响应字节）。默认关闭：平时是噪音，只有在查缓存时才开。上面那三个厂商字段都已解析，流式响应从 SSE 事件里累加。
 - 实测：接入真实上游后查看厂商返回的缓存命中字段（Anthropic 的 `usage.cache_read_input_tokens`、OpenAI 的 `usage.prompt_tokens_details.cached_tokens`、Gemini 的 `usageMetadata.cachedContentTokenCount`），要求第 2 轮起命中率与「客户端直连」时基本一致。这一项是 M2 的验收项，不通过不能发布。
 
 ### 7.8 已发送文本的形态冻结（7.2 #7b 的实现）
@@ -975,6 +979,12 @@ cache_prefix:
   inject_when_vault_nonempty: true  # inject_always=false 时的单调递增策略
   verify_bytes: true              # 未替换时断言逐字节相同（测试用，生产可关）
   leaf_cache: true                # 叶子级缓存（7.6），只影响速度不影响输出
+
+log:
+  level: info                     # debug | info | warn | error
+  format: text                    # text | json
+  usage: false                    # 每个响应记一行上游 token 账目（7.7）
+  # 容器里配置文件打在镜像里，KEYCORDON_LOG_LEVEL / KEYCORDON_LOG_USAGE 环境变量优先于文件
 
 mode: enforce                     # observe：只审计不替换；enforce：替换并还原
 

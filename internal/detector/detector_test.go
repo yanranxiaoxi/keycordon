@@ -32,7 +32,7 @@ func TestEmbeddedRuleTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	own := map[string]bool{}
-	for _, id := range []string{"compound-env-secret", "db-uri-anon-user", "openai-project-key", "yaml-netrc-secret", "nl-credential-mention", "bare-random-token"} {
+	for _, id := range []string{"compound-env-secret", "db-uri-anon-user", "openai-project-key", "provider-prefixed-key", "yaml-netrc-secret", "nl-credential-mention", "bare-random-token"} {
 		own[id] = true
 	}
 	n := 0

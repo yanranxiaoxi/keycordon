@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -86,6 +87,10 @@ type Vault struct {
 type Log struct {
 	Level  string `yaml:"level"`
 	Format string `yaml:"format"`
+	// Usage logs the token accounting the upstream reports (input, cached
+	// input, output). It is off by default: one line per response is noise
+	// unless a prompt cache is what you are investigating.
+	Usage bool `yaml:"usage"`
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -184,7 +189,29 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	c.applyDefaults()
+	c.applyEnv()
 	return c, c.Validate()
+}
+
+// applyEnv lets a container change the log settings without rewriting the
+// image's config file. Environment wins over the file, which is the usual
+// convention when the file is baked into an image.
+func (c *Config) applyEnv() {
+	if v := strings.TrimSpace(os.Getenv("KEYCORDON_LOG_LEVEL")); v != "" {
+		c.Log.Level = v
+	}
+	if v := strings.TrimSpace(os.Getenv("KEYCORDON_LOG_USAGE")); v != "" {
+		c.Log.Usage = truthy(v)
+	}
+}
+
+// truthy reads the spellings a shell offers for a boolean.
+func truthy(v string) bool {
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // Validate checks the configuration.

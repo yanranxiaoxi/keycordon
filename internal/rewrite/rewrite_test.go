@@ -265,8 +265,60 @@ func TestInjectionTargets(t *testing.T) {
 	}
 	a := adapter(t, "/v1/responses")
 	res, _ := newRW(true).JSON(context.Background(), a, []byte(`{"previous_response_id":"resp_1","input":[]}`), caller())
-	if res.Injected {
-		t.Error("continuation of stored response must not be injected")
+	if res.Injected || res.InjectReason != InjectServerState {
+		t.Errorf("continuation of stored response must not be injected (reason %q)", res.InjectReason)
+	}
+}
+
+// TestInjectReason pins the vocabulary the log line relies on: every request
+// says why the notice was added or skipped.
+func TestInjectReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		rw     *Rewriter
+		path   string
+		body   string
+		reason string
+	}{
+		{"added", newRW(true), "/v1/chat/completions", `{"messages":[]}`, InjectAdded},
+		{"already present", newRW(true), "/v1/chat/completions",
+			`{"messages":[{"role":"system","content":"` + InstructionMarker + `"}]}`, InjectPresent},
+		{"stored response", newRW(true), "/v1/responses",
+			`{"previous_response_id":"resp_1"}`, InjectServerState},
+		{"disabled", newRW(false), "/v1/chat/completions", `{"messages":[]}`, InjectDisabled},
+		{"no target", newRW(true), "/v1/images/generations", `{"prompt":"a cat"}`, InjectNoTarget},
+		{"not needed", &Rewriter{Detector: det, Inject: true, Sent: vault.NewSent(0), Upstream: "test"},
+			"/v1/chat/completions", `{"messages":[]}`, InjectNotNeeded},
+	} {
+		res, err := tc.rw.JSON(context.Background(), adapter(t, tc.path), []byte(tc.body), caller())
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if res.InjectReason != tc.reason {
+			t.Errorf("%s: reason %q, want %q", tc.name, res.InjectReason, tc.reason)
+		}
+	}
+}
+
+// TestCountsRecordsScanShape keeps the diagnostic counters honest: a text
+// answered from the sent memo is counted as frozen, not as scanned.
+func TestCountsRecordsScanShape(t *testing.T) {
+	rw := newRW(true)
+	a := adapter(t, "/v1/chat/completions")
+	body := []byte(`{"messages":[{"role":"user","content":"the first message"},{"role":"user","content":"the second message"}]}`)
+	res, err := rw.JSON(context.Background(), a, body, caller())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Units != 2 || res.Frozen != 0 {
+		t.Errorf("first pass: units %d frozen %d", res.Units, res.Frozen)
+	}
+	res, err = rw.JSON(context.Background(), a, body, caller())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Units != 2 || res.Frozen != 2 {
+		t.Errorf("second pass: units %d frozen %d", res.Units, res.Frozen)
 	}
 }
 

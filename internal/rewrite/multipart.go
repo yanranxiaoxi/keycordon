@@ -23,7 +23,10 @@ type mpPart struct {
 // File parts are copied unchanged. The body is rebuilt with the original
 // boundary only when something was replaced.
 func (rw *Rewriter) Multipart(ctx context.Context, a *protocol.Adapter, raw []byte, contentType string, c *vault.Caller) (Result, error) {
-	res := Result{Body: raw, Replaced: map[string]int{}}
+	res := Result{Body: raw, Replaced: map[string]int{}, InjectReason: InjectNoTarget}
+	if !rw.Inject {
+		res.InjectReason = InjectDisabled
+	}
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil || params["boundary"] == "" {
 		return res, fmt.Errorf("%w: bad multipart content type", ErrBadRequest)

@@ -40,6 +40,18 @@ type Rewriter struct {
 	Upstream string
 }
 
+// Reasons reported in Result.InjectReason.
+const (
+	InjectAdded       = "added"
+	InjectPresent     = "already_present"
+	InjectServerState = "server_state"
+	InjectDisabled    = "disabled"
+	InjectNoTarget    = "no_target"
+	InjectNotNeeded   = "not_needed"
+	InjectNoPlace     = "no_place"
+	InjectEmptyBody   = "empty_body"
+)
+
 // Result describes a rewrite.
 type Result struct {
 	Body []byte
@@ -47,6 +59,14 @@ type Result struct {
 	// of already known secrets).
 	Replaced map[string]int
 	Injected bool
+	// InjectReason explains Injected: why the notice was added, or which
+	// condition kept it out. It makes "injected: false" self-explanatory in
+	// the log.
+	InjectReason string
+	// Units counts the strings that were scanned and Frozen those answered
+	// from the sent memo without detection.
+	Units  int
+	Frozen int
 }
 
 // Count returns the total number of replacements.
@@ -95,16 +115,35 @@ func (rw *Rewriter) JSON(ctx context.Context, a *protocol.Adapter, raw []byte, c
 		return res, fmt.Errorf("%w: %v", ErrBadRequest, err)
 	}
 	units := rw.collect(a, doc, maxDepth)
-	edits, err := rw.replace(ctx, units, c, res.Replaced)
+	res.Units = len(units)
+	edits, frozen, err := rw.replace(ctx, units, c, res.Replaced)
 	if err != nil {
 		return res, err
 	}
-	if rw.Inject && a.Instruction != nil && (rw.InjectAlways || len(edits) > 0 || c.Len() > 0) &&
-		!strings.Contains(string(raw), InstructionMarker) && !continuesStoredResponse(doc.Root) {
-		if e, ok := instructionEdit(doc.Root, a.Instruction, Instruction); ok {
-			edits = append(edits, e)
-			res.Injected = true
+	res.Frozen = frozen
+	if rw.Inject && a.Instruction != nil {
+		switch {
+		case !rw.InjectAlways && len(edits) == 0 && c.Len() == 0:
+			res.InjectReason = InjectNotNeeded
+		case strings.Contains(string(raw), InstructionMarker):
+			// An earlier turn already carried the notice: the client echoed
+			// it, or a second keycordon is in front of this one.
+			res.InjectReason = InjectPresent
+		case continuesStoredResponse(doc.Root):
+			res.InjectReason = InjectServerState
+		default:
+			if e, ok := instructionEdit(doc.Root, a.Instruction, Instruction); ok {
+				edits = append(edits, e)
+				res.Injected = true
+				res.InjectReason = InjectAdded
+			} else {
+				res.InjectReason = InjectNoPlace
+			}
 		}
+	} else if rw.Inject {
+		res.InjectReason = InjectNoTarget
+	} else {
+		res.InjectReason = InjectDisabled
 	}
 	body, err := jsonx.Apply(raw, edits)
 	if err != nil {
@@ -194,7 +233,7 @@ type span struct {
 	rule       string
 }
 
-func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller, counts map[string]int) ([]jsonx.Edit, error) {
+func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller, counts map[string]int) ([]jsonx.Edit, int, error) {
 	// A text that has already been sent goes again exactly as it went (design
 	// 7.8). Its spans are frozen in the sent memo, so detection can be skipped
 	// for it entirely — an agent re-sends its whole history every turn, and
@@ -217,7 +256,7 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 	if len(texts) > 0 {
 		hits, err := rw.Detector.Scan(ctx, texts)
 		if err != nil {
-			return nil, fmt.Errorf("detector: %w", err)
+			return nil, 0, fmt.Errorf("detector: %w", err)
 		}
 		for j, h := range hits {
 			found[idx[j]] = h
@@ -227,10 +266,13 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 	// placeholder write marks the caller's known-value index dirty, and
 	// rebuilding that index per unit is quadratic in the number of secrets
 	// (1000 keys took 1.8 s instead of 6 ms).
+	nFrozen := 0
 	for i, u := range units {
-		if !frozen[i] {
-			spans[i] = rw.spans(u, found[i], c)
+		if frozen[i] {
+			nFrozen++
+			continue
 		}
+		spans[i] = rw.spans(u, found[i], c)
 	}
 	var edits []jsonx.Edit
 	for i, u := range units {
@@ -242,7 +284,7 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 			counts[s.rule]++
 		}
 	}
-	return edits, nil
+	return edits, nFrozen, nil
 }
 
 // spans merges detector hits and known-secret matches for one unit, clips

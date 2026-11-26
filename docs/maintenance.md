@@ -44,7 +44,7 @@ keycordon 有三个外部依赖面会持续变化，任何一个落后都会导�
 | 依赖版本 | `v2.0.0-rc.9` | [go.mod](../go.mod) |
 | 规则文件声明的最低版本 | `v2.0.0-rc.9` | [proxy.toml](../internal/detector/rules/proxy.toml) 的 `minVersion` |
 | 自定义规则 | 7 条 | 同上 |
-| 评估集用例 | 34 条 | [testdata/eval.json](../internal/detector/testdata/eval.json) |
+| 评估集用例 | 40 条 | [testdata/eval.json](../internal/detector/testdata/eval.json) |
 | 质量门槛 | precision ≥ 0.95、recall ≥ 0.95 | [eval_test.go](../internal/detector/eval_test.go) |
 
 **基线必须和上面三个数一致**。升级后如果变了，更新这张表。

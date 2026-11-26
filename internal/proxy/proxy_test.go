@@ -53,6 +53,13 @@ func (u *upstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func newProxy(t *testing.T, mutate func(*config.Config)) (*httptest.Server, *upstream) {
 	t.Helper()
+	ps, up, _ := newProxyLog(t, mutate)
+	return ps, up
+}
+
+// newProxyLog is newProxy with the server's log captured.
+func newProxyLog(t *testing.T, mutate func(*config.Config)) (*httptest.Server, *upstream, *bytes.Buffer) {
+	t.Helper()
 	once.Do(func() {
 		var err error
 		if det, err = detector.New(detector.Options{MaxDecodeDepth: 2}); err != nil {
@@ -70,17 +77,18 @@ func newProxy(t *testing.T, mutate func(*config.Config)) (*httptest.Server, *ups
 	if mutate != nil {
 		mutate(cfg)
 	}
+	logs := &bytes.Buffer{}
 	srv, err := New(Options{
 		Config: cfg, Registry: reg, Detector: det,
 		Vault:  vault.New([]byte("0123456789abcdef0123456789abcdef"), vault.Options{}),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ps := httptest.NewServer(srv)
 	t.Cleanup(ps.Close)
-	return ps, up
+	return ps, up, logs
 }
 
 func do(t *testing.T, method, url string, body []byte, hdr map[string]string) (*http.Response, []byte) {
@@ -309,6 +317,85 @@ func TestObserveMode(t *testing.T) {
 	do(t, "POST", ps.URL+"/v1/chat/completions", body, nil)
 	if !bytes.Equal(up.body, body) {
 		t.Fatal("observe mode must forward the original body")
+	}
+}
+
+// TestRequestLogFields pins the diagnostic fields on "request filtered": a
+// quiet line that replaced nothing still has to say why.
+func TestRequestLogFields(t *testing.T) {
+	ps, up, logs := newProxyLog(t, nil)
+	up.handler = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}
+	do(t, "POST", ps.URL+"/v1/chat/completions",
+		[]byte(`{"messages":[{"role":"user","content":"a harmless sentence"}]}`), nil)
+
+	for _, want := range []string{"request filtered", "inject=added", "units=1", "frozen=0", "body_bytes=", "replaced=0"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log line lacks %q: %s", want, logs.String())
+		}
+	}
+}
+
+// TestUsageLogged covers the opt-in token accounting: off by default, one
+// line per response when enabled.
+func TestUsageLogged(t *testing.T) {
+	const answer = `{"model":"gpt-4o","choices":[],"usage":{"prompt_tokens":2000,"completion_tokens":51,` +
+		`"prompt_tokens_details":{"cached_tokens":1920}}}`
+
+	ps, up, logs := newProxyLog(t, nil)
+	up.handler = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(answer))
+	}
+	do(t, "POST", ps.URL+"/v1/chat/completions",
+		[]byte(`{"messages":[{"role":"user","content":"`+ghToken+` please"}]}`), nil)
+	if strings.Contains(logs.String(), "upstream usage") {
+		t.Errorf("usage logged without log.usage: %s", logs.String())
+	}
+
+	ps, up, logs = newProxyLog(t, func(c *config.Config) { c.Log.Usage = true })
+	up.handler = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(answer))
+	}
+	do(t, "POST", ps.URL+"/v1/chat/completions",
+		[]byte(`{"messages":[{"role":"user","content":"`+ghToken+` please"}]}`), nil)
+	for _, want := range []string{"upstream usage", "model=gpt-4o", "input_tokens=2000", "cached_tokens=1920",
+		"output_tokens=51", "cache_hit=96.0%"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("usage line lacks %q: %s", want, logs.String())
+		}
+	}
+}
+
+// TestUsageLoggedSSE reads the accounting out of a stream, which is where
+// every provider reports it for streaming responses.
+func TestUsageLoggedSSE(t *testing.T) {
+	ps, up, logs := newProxyLog(t, func(c *config.Config) { c.Log.Usage = true })
+	up.handler = func(w http.ResponseWriter, r *http.Request, body []byte) {
+		ph := phRe.FindString(string(body))
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, ev := range []string{
+			`data: {"choices":[{"delta":{"content":"` + ph + `"}}]}` + "\n\n",
+			`data: {"model":"claude-sonnet-4-5","choices":[],"usage":{"input_tokens":18,"output_tokens":220,` +
+				`"cache_read_input_tokens":48000}}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			io.WriteString(w, ev)
+		}
+	}
+	_, got := do(t, "POST", ps.URL+"/v1/chat/completions",
+		[]byte(`{"messages":[{"role":"user","content":"`+ghToken+` please"}]}`), nil)
+	if !strings.Contains(string(got), ghToken) {
+		t.Fatalf("stream not restored: %s", got)
+	}
+	for _, want := range []string{"upstream usage", "model=claude-sonnet-4-5", "input_tokens=18",
+		"cached_tokens=48000", "output_tokens=220"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("usage line lacks %q: %s", want, logs.String())
+		}
 	}
 }
 

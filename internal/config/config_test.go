@@ -81,3 +81,21 @@ func TestLimitsDefaults(t *testing.T) {
 		t.Errorf("scan_timeout = %v", c.Limits.ScanTimeout)
 	}
 }
+
+// TestLogEnvOverrides covers the container case: the config file is baked
+// into the image, so the log settings have to be changeable from the
+// environment without rebuilding it.
+func TestLogEnvOverrides(t *testing.T) {
+	t.Setenv("KEYCORDON_LOG_LEVEL", "debug")
+	t.Setenv("KEYCORDON_LOG_USAGE", "1")
+	c, err := Load("../../keycordon.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Log.Level != "debug" || !c.Log.Usage {
+		t.Fatalf("env ignored: %+v", c.Log)
+	}
+	if def := Default(); def.Log.Usage {
+		t.Fatal("usage logging must stay off by default")
+	}
+}
