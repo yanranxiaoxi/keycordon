@@ -207,12 +207,7 @@ docker run -d -p 8318:8318 -v kcdata:/var/lib/keycordon \
     -upstream http://host.docker.internal:8317
 ```
 
-主密钥、上游地址、调用方隔离、健康检查与升级注意事项见 [docker/README.md](docker/README.md)。用 Podman Quadlet（systemd 托管、开机自启、自动更新）部署见 [docs/quadlet.md](docs/quadlet.md)。
-
-```sh
-cp deploy/quadlet/keycordon.container ~/.config/containers/systemd/
-systemctl --user daemon-reload && systemctl --user start keycordon
-```
+主密钥、上游地址、调用方隔离、健康检查与升级注意事项见 [docker/README.md](docker/README.md)。
 
 CI（`.gitlab-ci.yml`）：
 

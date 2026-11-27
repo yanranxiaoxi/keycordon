@@ -137,10 +137,6 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 
 配置里写 `protocols.extra_dir: /etc/keycordon/protocols`。文件格式见 [internal/protocol/protocols/](../internal/protocol/protocols/)。
 
-## Quadlet / systemd
-
-用 Podman Quadlet 部署（开机自启、自动更新、journald 日志）见 [docs/quadlet.md](../docs/quadlet.md)，单元文件在 [deploy/quadlet/](../deploy/quadlet/)。
-
 ## CI 变量
 
 `.gitlab-ci.yml` 会在默认分支 push 与 `vX.Y.Z` 标签上构建镜像并推送到 Docker Hub 与 GitLab Registry。需要在 GitLab 项目里配置的变量：
