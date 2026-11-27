@@ -125,7 +125,7 @@ docker stop keycordon && docker rm keycordon
 docker run -d ... keycordon:latest serve -config /etc/keycordon/config.yaml -upstream ...
 ```
 
-**只要卷里的主密钥还在，占位符就不变**，升级不会打穿上游缓存。规则集变了可能导致同一段文本的判定变化——这是设计文档 §7.2 #84 记录的已知成本，升级前看一眼 [maintenance.md](maintenance.md) 的检测质量门槛有没有过。
+**只要卷里的主密钥还在，占位符就不变**，升级不会打穿上游缓存。规则集变了可能导致同一段文本的判定变化——这是设计文档 §7.2 #84 记录的已知成本，升级前看一眼 [maintenance.md](../docs/maintenance.md) 的检测质量门槛有没有过。
 
 ## 自定义协议适配器
 
