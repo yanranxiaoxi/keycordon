@@ -57,6 +57,7 @@ keycordon version
 | WebSocket / Realtime | 默认返回 501，客户端会回退到 HTTP；可配置为透传 |
 | 非回环地址监听且请求没有凭据 | 401 |
 | `mode: observe` | 只记日志、不改写，用来上线前评估误报 |
+| 超过 256 KiB 的单个字符串 | 切成 64 KiB 的块并带 8 KiB 重叠后并行扫描；含 PEM 等超长块时不切分（见 design §11.3） |
 
 ### 请求体大小限制
 

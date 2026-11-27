@@ -341,6 +341,8 @@ go build ./... && go vet ./... && gofmt -l . && go test -race -count=1 ./...
 | 不可能含密钥的短字符串不进检测 | `TestShortUnitsAreNotScanned`（见 design.md §4.2 第 6 条） |
 | 命中率口径跨厂商一致 | `TestHitRate`、`TestUsageLoggedSSE`（Anthropic 不会算出 266666%） |
 | `scan_ms` 不包含读取与解压 | `TestReadAndScanAreSeparate` |
+| 切分扫描不会漏掉跨切口的密钥 | `TestChunkCoversEveryPosition`、`TestChunkedMatchesUnchunked`、`TestChunkingKeepsOrdinarySecrets` |
+| 超长块（PEM 等）不切分 | `TestOversizedBlockIsNotChunked`（见 design.md §11.3） |
 | 镜像可构建且能启动 | CI 的 `docker-build` 冒烟测试（`version` + `adapters`） |
 | 镜像以非 root 运行、密钥落在卷上 | 手工：`podman run --rm -v kcd:/var/lib/keycordon ...` 后检查 `/var/lib/keycordon/master.key` 属主 |
 

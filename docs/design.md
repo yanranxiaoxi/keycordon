@@ -1226,6 +1226,8 @@ i7-14650HX，单线程，`go test ./internal/rewrite -run TestScaleTable`（`SCA
 
 `TestConcurrentRequests` 与 `TestConcurrentStreams` 守着前两条。
 
+**一个单元只能占一个 worker。** betterleaks 按“一次 Scan 调用里的每个文本”分配 worker，所以一个 512 KiB 的单个字符串会压在一个核上，其余核空转。实测（4 核）：同样 64 KiB，一个单元 1.6 MB/s，切成四块 5.6 MB/s。因此 `internal/rewrite/chunk.go` 把超过 256 KiB 的单元切成 64 KiB 的块，相邻块**重叠 8 KiB**：一个跨切口的密钥会在某一块里完整出现，上下文规则也能看到值前面的词。重叠也是它的局限：超过 8 KiB 的匹配（例如一个 30000 字节的 PEM）在切分后会两边都看不全，实测确认会**完全漏检**。所以文本里出现 `-----BEGIN`、`AKIA`、`ssh-rsa AAAA` 这类块头时不切分，宁可单核扫描也不能静默漏掉。由 `TestChunkCoversEveryPosition`、`TestChunkedMatchesUnchunked`、`TestOversizedBlockIsNotChunked`、`TestChunkingKeepsOrdinarySecrets` 守住。
+
 **唯一的排队点**是 betterleaks 的 worker 池。设计意图是防止大量并发扫描把 goroutine 数量爆炸式放大；因为每次扫描只占用一个 slot、单个请求通常只有几毫秒，实际很难触顶。若确实需要提高并发度，`detector.Options.Workers` 可以调大。
 
 ### 11.4 内存与并发的关系

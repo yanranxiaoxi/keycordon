@@ -247,6 +247,13 @@ type span struct {
 	rule       string
 }
 
+// chunkSource records which unit a scanned text came from, and where the
+// slice starts inside that unit's text.
+type chunkSource struct {
+	unit  int
+	start int
+}
+
 func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller, counts map[string]int) ([]jsonx.Edit, int, error) {
 	// A text that has already been sent goes again exactly as it went (design
 	// 7.8). Its spans are frozen in the sent memo, so detection can be skipped
@@ -255,16 +262,35 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 	spans := make([][]span, len(units))
 	frozen := make([]bool, len(units))
 	var texts []string
+	// A unit over chunkMinSize goes to the detector as several overlapping
+	// slices: betterleaks gives one worker slot per text, so a single huge
+	// string would run on one core. chunkSources records where each slice
+	// came from so the hits can be mapped back and merged.
+	var chunkSources []chunkSource
 	var idx []int
 	for i, u := range units {
 		if f, ok := rw.Sent.Get(c.ID(), rw.Upstream, u.prefix, u.text); ok {
 			spans[i], frozen[i] = fromVaultSpans(f), true
 			continue
 		}
-		if !u.known {
+		if u.known {
+			continue
+		}
+		parts, split := rw.plan(u)
+		if !split {
 			texts = append(texts, u.prefix+u.text)
 			idx = append(idx, i)
+			chunkSources = append(chunkSources, chunkSource{unit: i})
+			continue
 		}
+		for _, r := range parts {
+			texts = append(texts, u.prefix+u.text[r.start:r.end])
+			idx = append(idx, i)
+			chunkSources = append(chunkSources, chunkSource{unit: i, start: r.start})
+		}
+		texts = append(texts, u.prefix+u.text)
+		idx = append(idx, i)
+		chunkSources = append(chunkSources, chunkSource{unit: i})
 	}
 	found := make([][]detector.Hit, len(units))
 	if len(texts) > 0 {
@@ -272,8 +298,17 @@ func (rw *Rewriter) replace(ctx context.Context, units []*unit, c *vault.Caller,
 		if err != nil {
 			return nil, 0, fmt.Errorf("detector: %w", err)
 		}
+		// Overlapping slices report the same secret more than once, and the
+		// same requirement that made the cut safe (a secret is never longer
+		// than the overlap) means the copies are byte-identical once mapped
+		// back, so spans() merges them.
 		for j, h := range hits {
-			found[idx[j]] = h
+			src := chunkSources[j]
+			for k := range h {
+				h[k].Start += src.start
+				h[k].End += src.start
+			}
+			found[src.unit] = append(found[src.unit], h...)
 		}
 	}
 	// Two passes: find every span, then make every placeholder. A
