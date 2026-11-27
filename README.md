@@ -232,3 +232,15 @@ CI（`.gitlab-ci.yml`）：
 ```sh
 ./scripts/maintenance.sh   # 自动核对版本基线、跑全部断言、打印当前状态
 ```
+
+### 发版
+
+```sh
+git tag -a vX.Y.Z -F <版本说明>
+git push origin vX.Y.Z
+```
+
+标签流水线会依次完成：`go-test` → 7 个平台的二进制 → 推进软件包仓库 → 推镜像（`<version>` /
+`<major.minor>` / `latest`）→ 触发 cpa-gate 重建带 keycordon 的镜像。
+最后一步需要配好 `CPA_GATE_TRIGGER_TOKEN`，见
+[docker/README.md](docker/README.md#ci-变量)。

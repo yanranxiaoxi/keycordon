@@ -152,6 +152,16 @@ docker run -v "$PWD/my-protocols:/etc/keycordon/protocols:ro" ...
 | `DOCKERHUB_USER` | Docker Hub 用户名，也作为镜像路径 `docker.io/<user>/keycordon` | Variable | 建议勾 | 否 |
 | `DOCKERHUB_PASSWORD` | Docker Hub 的 Access Token（**不是**账号密码；Settings → Security → New Access Token，权限 Read & Write） | Variable | 建议勾 | 是 |
 
+发布后触发 cpa-gate 重建（Settings → CI/CD → Variables）：
+
+| 变量 | 说明 | 类型 | Protected | Masked |
+|---|---|---|---|---|
+| `CPA_GATE_TRIGGER_TOKEN` | cpa-gate 项目 Settings → CI/CD → Pipeline trigger tokens 生成的令牌。`vX.Y.Z` 发布成功后用它触发 cpa-gate 重建 `latest-keycordon` 镜像 | Variable | 建议勾 | 是 |
+| `CPA_GATE_REF` | cpa-gate 的分支名，默认 `main`。必须等于 cpa-gate 的默认分支，否则它的 workflow 规则会直接不建流水线 | Variable | 否 | 否 |
+
+没配 `CPA_GATE_TRIGGER_TOKEN` 时 `notify-cpa-gate` 会失败并说明缺什么，而不是静默跳过：
+静默跳过会让人以为 cpa-gate 已经跟着更新了。
+
 `CI_REGISTRY_USER` / `CI_REGISTRY_PASSWORD` / `CI_REGISTRY_IMAGE` 由 GitLab 自动注入，不用配。GitLab 自己的 Container Registry 需要在项目里启用：Settings → General → Visibility → Container Registry。
 
 ### 可执行文件（软件包仓库）

@@ -3,12 +3,14 @@ stages:
   - build
   - upload
   - docker
+  - notify
 
 # 流水线策略：
 #   - 默认分支的 push：nightly（可执行文件 + 镜像，都是 nightly）
 #   - 打 vX.Y.Z 标签：release（可执行文件 + 镜像，都是发布版本）
 #   - Merge Request、其它分支的 push 一律不创建流水线，
 #     因此不可能触发任何构建或上传
+#   - vX.Y.Z 标签发布成功后，额外触发 cpa-gate 重建镜像（见最后的 notify-cpa-gate）
 workflow:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
@@ -335,3 +337,63 @@ docker-release:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
     - ./scripts/ci-docker.sh release
+
+# #######################
+#        notify         #
+# #######################
+#
+# cpa-gate 的 latest-keycordon 镜像把 keycordon 的 linux/amd64 二进制烤了进去。
+# 它的构建任务会自己到软件包仓库挑最新的发布版本，所以 keycordon 发版之后，
+# 只有再触发一次 cpa-gate 的流水线，那个镜像才会更新；否则用户 pull 到的
+# latest-keycordon 里还是上一个 keycordon。
+#
+# 只依赖 upload，不依赖 docker-release：cpa-gate 消费的是软件包仓库里的二进制，
+# 与本项目自己的镜像推没推成功无关。绑到 docker-release 上，Docker Hub 抽风一次
+# 就会让 cpa-gate 悄悄停在旧版本。
+#
+# 只在 vX.Y.Z 标签上跑，nightly 不打扰 cpa-gate（nightly 不是发布版本，
+# cpa-gate 也不用它）。
+#
+# 需要两个 CI/CD 变量（Settings → CI/CD → Variables）：
+#   CPA_GATE_TRIGGER_TOKEN   cpa-gate 项目 Settings → CI/CD → Pipeline trigger tokens
+#                            生成的令牌，勾 Masked
+#   CPA_GATE_REF             cpa-gate 的分支名，默认 main；必须等于它的默认分支，
+#                            否则会被 cpa-gate 的 workflow 规则挡掉，什么也不建
+#
+# 令牌和 ref 走变量而不是写死在文件里：令牌进仓库历史等于泄露，ref 换主分支名
+# 时也不该改 CI 文件。
+notify-cpa-gate:
+  stage: notify
+  tags:
+    - linux
+    - docker
+  # 只要 curl，不需要 docker:dind
+  image: docker.io/curlimages/curl:latest
+  needs:
+    - job: upload
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+    # 变量没配时直接失败并说清缺什么，而不是静默跳过：静默跳过会让人以为
+    # cpa-gate 已经跟着更新了，实际没有
+    - |
+      set -eu
+      if [ -z "${CPA_GATE_TRIGGER_TOKEN:-}" ]; then
+        echo "缺少 CI/CD 变量 CPA_GATE_TRIGGER_TOKEN（Settings → CI/CD → Variables）" >&2
+        exit 1
+      fi
+      ref="${CPA_GATE_REF:-main}"
+      echo "keycordon ${CI_COMMIT_TAG} 已发布，触发 cpa-gate（ref=${ref}）"
+      resp=$(curl --fail --silent --show-error \
+        --request POST \
+        --form "token=${CPA_GATE_TRIGGER_TOKEN}" \
+        --form "ref=${ref}" \
+        "${CI_API_V4_URL}/projects/164/trigger/pipeline")
+      # 触发接口的成功响应里有 web_url，打出来方便直接点进去看结果。
+      # 取不到不代表失败（格式变化不该让发布报红），原样打出来即可。
+      url=$(printf %s "$resp" | grep -o '"web_url"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+      if [ -n "$url" ]; then
+        echo "cpa-gate 流水线：$url"
+      else
+        echo "cpa-gate 触发响应：$resp"
+      fi
