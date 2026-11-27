@@ -94,6 +94,10 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, a *protocol.Adap
 		writeError(w, http.StatusBadRequest, "keycordon_bad_encoding", "failed to decode request body")
 		return
 	}
+	// read_ms covers receiving the body and undoing Content-Encoding; scan_ms
+	// covers only detection and rewriting. Bundling them made scan_ms look
+	// like scan time when it was mostly a gzip decompress of a 900 KB body.
+	readTime := time.Since(start)
 
 	ct := r.Header.Get("Content-Type")
 	mt, _, _ := mime.ParseMediaType(ct)
@@ -110,7 +114,7 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, a *protocol.Adap
 		writeError(w, http.StatusUnsupportedMediaType, "keycordon_unsupported_content_type", "unsupported Content-Type for this AI endpoint")
 		return
 	}
-	scanTime := time.Since(start)
+	scanTime := time.Since(start) - readTime
 	if err != nil {
 		if errors.Is(err, rewrite.ErrBadRequest) {
 			writeError(w, http.StatusBadRequest, "keycordon_bad_request", "request body is not valid for this AI endpoint")
@@ -145,7 +149,7 @@ func (s *Server) filter(w http.ResponseWriter, r *http.Request, a *protocol.Adap
 		"adapter", a.ID, "caller", shortID(callerID), "mode", s.cfg.Mode,
 		"replaced", res.Count(), "rules", res.Replaced, "injected", res.Injected,
 		"inject", res.InjectReason, "units", res.Units, "frozen", res.Frozen,
-		"body_bytes", len(raw), "scan_ms", scanTime.Milliseconds(),
+		"body_bytes", len(raw), "read_ms", readTime.Milliseconds(), "scan_ms", scanTime.Milliseconds(),
 	}
 	if worthInfo(s.cfg.Mode, res) {
 		s.log.Info("request filtered", attrs...)
@@ -187,9 +191,15 @@ func (s *Server) modifyResponse(resp *http.Response) error {
 			if i.Empty() {
 				return
 			}
-			s.log.Info("upstream usage", "caller", shortID(st.caller.ID()), "adapter", st.a.ID,
-				"model", i.Model, "input_tokens", i.InputTokens, "cached_tokens", i.CachedTokens,
-				"output_tokens", i.OutputTokens, "cache_hit", fmt.Sprintf("%.1f%%", 100*i.HitRate()))
+			attrs := []any{
+				"caller", shortID(st.caller.ID()), "adapter", st.a.ID, "model", i.Model,
+				"input_tokens", i.InputTokens, "cached_tokens", i.CachedTokens,
+				"output_tokens", i.OutputTokens, "cache_hit", fmt.Sprintf("%.1f%%", 100*i.HitRate()),
+			}
+			if i.CacheWriteTokens > 0 {
+				attrs = append(attrs, "cache_write_tokens", i.CacheWriteTokens)
+			}
+			s.log.Info("upstream usage", attrs...)
 		})
 	}
 	if !st.restore {

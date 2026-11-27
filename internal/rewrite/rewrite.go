@@ -69,6 +69,15 @@ type Result struct {
 	Frozen int
 }
 
+// minLen is the shortest span that may be replaced. A text shorter than this
+// cannot contain one, so it is not worth scanning (see leafUnits).
+func (rw *Rewriter) minLen() int {
+	if rw.MinLength <= 0 {
+		return 8
+	}
+	return rw.MinLength
+}
+
 // Count returns the total number of replacements.
 func (r Result) Count() int {
 	n := 0
@@ -204,7 +213,12 @@ func (rw *Rewriter) leafUnits(units []*unit, doc *jsonx.Doc, n *jsonx.Node, key 
 			return units
 		}
 	}
-	if n.Str == "" {
+	// A span is never shorter than minLen, so a text shorter than that cannot
+	// hold one: betterleaks would be asked about every "user", "system" and
+	// "assistant" string for nothing. Such a unit is also below the memo's
+	// floor, so it is re-scanned on every turn — skipping it is not just
+	// faster, it removes work that could never be cached.
+	if len(n.Str) < rw.minLen() {
 		return units
 	}
 	u := &unit{text: n.Str, known: known, chain: chain}
@@ -309,10 +323,7 @@ func (rw *Rewriter) spans(u *unit, hits []detector.Hit, c *vault.Caller) []span 
 		out = append(out, span{r.Start, r.End, "known"})
 	}
 	phs := vault.FindPlaceholders(u.text)
-	minLen := rw.MinLength
-	if minLen <= 0 {
-		minLen = 8
-	}
+	minLen := rw.minLen()
 	var kept []span
 	for _, s := range out {
 		s.start, s.end = snap(u.text, s.start, s.end)

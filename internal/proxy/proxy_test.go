@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 
@@ -331,11 +334,66 @@ func TestRequestLogFields(t *testing.T) {
 	do(t, "POST", ps.URL+"/v1/chat/completions",
 		[]byte(`{"messages":[{"role":"user","content":"a harmless sentence"}]}`), nil)
 
-	for _, want := range []string{"request filtered", "inject=added", "units=1", "frozen=0", "body_bytes=", "replaced=0"} {
+	for _, want := range []string{"request filtered", "inject=added", "units=1", "frozen=0",
+		"body_bytes=", "replaced=0", "read_ms=", "scan_ms="} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log line lacks %q: %s", want, logs.String())
 		}
 	}
+}
+
+// TestReadAndScanAreSeparate pins the split: read_ms must not grow with the
+// time spent detecting. A request whose scan dominates therefore has
+// scan_ms > read_ms even though the body is small.
+func TestReadAndScanAreSeparate(t *testing.T) {
+	// A generous scan budget: this test is about which timer a millisecond
+	// lands in, not about the deadline.
+	ps, up, logs := newProxyLog(t, func(c *config.Config) { c.Limits.ScanTimeout = 30 * time.Second })
+	up.handler = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+	}
+	// Detection has to dominate the read, so every string carries keys the
+	// detector must look at: a body of a few KB is enough, since reading it
+	// costs microseconds.
+	var b strings.Builder
+	b.WriteString(`{"messages":[{"role":"user","content":"`)
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "key%d=%s secret%d=%s ", i,
+			"sk-"+strings.Repeat(string(rune('a'+i%26)), 20)+"0123456789",
+			i, "pw"+strings.Repeat(string(rune('A'+i%26)), 14)+"98765432")
+	}
+	b.WriteString(`"}]}`)
+	do(t, "POST", ps.URL+"/v1/chat/completions", []byte(b.String()), nil)
+
+	line := logs.String()
+	read, scan := fieldMillis(t, line, "read_ms="), fieldMillis(t, line, "scan_ms=")
+	if scan <= 0 {
+		t.Fatalf("scan_ms did not register: %s", line)
+	}
+	if read >= scan {
+		t.Errorf("read_ms %d is not smaller than scan_ms %d, so the split did not happen: %s",
+			read, scan, line)
+	}
+}
+
+// fieldMillis reads an integer field from a log line.
+func fieldMillis(t *testing.T, line, key string) int64 {
+	t.Helper()
+	i := strings.Index(line, key)
+	if i < 0 {
+		t.Fatalf("%q missing: %s", key, line)
+	}
+	rest := line[i+len(key):]
+	j := 0
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	n, err := strconv.ParseInt(rest[:j], 10, 64)
+	if err != nil {
+		t.Fatalf("%q: %v", key, err)
+	}
+	return n
 }
 
 // TestUsageLogged covers the opt-in token accounting: off by default, one
@@ -380,7 +438,7 @@ func TestUsageLoggedSSE(t *testing.T) {
 		for _, ev := range []string{
 			`data: {"choices":[{"delta":{"content":"` + ph + `"}}]}` + "\n\n",
 			`data: {"model":"claude-sonnet-4-5","choices":[],"usage":{"input_tokens":18,"output_tokens":220,` +
-				`"cache_read_input_tokens":48000}}` + "\n\n",
+				`"cache_read_input_tokens":48000,"cache_creation_input_tokens":1024}}` + "\n\n",
 			"data: [DONE]\n\n",
 		} {
 			io.WriteString(w, ev)
@@ -391,8 +449,11 @@ func TestUsageLoggedSSE(t *testing.T) {
 	if !strings.Contains(string(got), ghToken) {
 		t.Fatalf("stream not restored: %s", got)
 	}
-	for _, want := range []string{"upstream usage", "model=claude-sonnet-4-5", "input_tokens=18",
-		"cached_tokens=48000", "output_tokens=220"} {
+	// Anthropic's input_tokens (18) excludes the cache read (48000) and the
+	// cache write (1024), so the whole input is 49042 and the cache covers
+	// 97.9% of it. Dividing by 18 would report 266666%.
+	for _, want := range []string{"upstream usage", "model=claude-sonnet-4-5", "input_tokens=49042",
+		"cached_tokens=48000", "cache_write_tokens=1024", "output_tokens=220", "cache_hit=97.9%"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("usage line lacks %q: %s", want, logs.String())
 		}

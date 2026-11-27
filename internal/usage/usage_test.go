@@ -25,10 +25,20 @@ func TestFromJSON(t *testing.T) {
 			want: Info{Model: "gpt-5", InputTokens: 900, CachedTokens: 768, OutputTokens: 12},
 		},
 		{
+			// Anthropic's input_tokens leaves out both the cache read and the
+			// cache write, so the whole input is their sum.
 			name: "anthropic",
 			body: `{"model":"claude-sonnet-4-5","usage":{"input_tokens":18,"output_tokens":220,` +
 				`"cache_read_input_tokens":48000,"cache_creation_input_tokens":1024}}`,
-			want: Info{Model: "claude-sonnet-4-5", InputTokens: 18, CachedTokens: 48000, OutputTokens: 220},
+			want: Info{Model: "claude-sonnet-4-5", InputTokens: 49042, CachedTokens: 48000,
+				CacheWriteTokens: 1024, OutputTokens: 220},
+		},
+		{
+			// A cache write without a cache read, which is the first turn.
+			name: "anthropic write only",
+			body: `{"model":"claude-sonnet-4-5","usage":{"input_tokens":3000,"output_tokens":40,` +
+				`"cache_creation_input_tokens":2800}}`,
+			want: Info{Model: "claude-sonnet-4-5", InputTokens: 5800, CacheWriteTokens: 2800, OutputTokens: 40},
 		},
 		{
 			name: "gemini",
@@ -54,12 +64,18 @@ func TestFromJSON(t *testing.T) {
 }
 
 func TestHitRate(t *testing.T) {
-	i := Info{InputTokens: 1000, CachedTokens: 900}
-	if r := i.HitRate(); r < 0.899 || r > 0.901 {
+	if r := (Info{InputTokens: 1000, CachedTokens: 900}).HitRate(); r < 0.899 || r > 0.901 {
 		t.Errorf("hit rate %v", r)
 	}
 	if r := (Info{}).HitRate(); r != 0 {
 		t.Errorf("empty hit rate %v", r)
+	}
+	// The case that named this test: Anthropic's input_tokens alone is the
+	// uncached part, so dividing by it would report 266666%.
+	i := FromJSON([]byte(`{"usage":{"input_tokens":18,"output_tokens":220,` +
+		`"cache_read_input_tokens":48000,"cache_creation_input_tokens":1024}}`))
+	if r := i.HitRate(); r < 0.978 || r > 0.980 {
+		t.Errorf("anthropic hit rate %v (input %d cached %d)", r, i.InputTokens, i.CachedTokens)
 	}
 }
 

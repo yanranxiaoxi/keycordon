@@ -123,10 +123,11 @@ limits:
 |---|---|
 | `replaced` / `rules` | 替换次数，按规则 ID 分组（`known` = 命中已知密钥回扫） |
 | `injected` / `inject` | 是否注入了占位符说明；`inject` 说明原因，见下表 |
-| `units` | 本次扫描的字符串数（JSON 里的叶子字符串，工具调用参数里的 JSON 会展开） |
+| `units` | 本次扫描的字符串数（JSON 里的叶子字符串，工具调用参数里的 JSON 会展开；已冻结的字段和短于 `min_value_length` 的字符串不算在内） |
 | `frozen` | 其中有多少条走上一次已发送时的形态、完全跳过检测（设计 §7.8 的 memo） |
 | `body_bytes` | 请求体大小（未解压的线上字节数） |
-| `scan_ms` | 扫描 + 改写耗时，不含上游 |
+| `read_ms` | 读完请求体并卸掉 Content-Encoding 的耗时 |
+| `scan_ms` | 检测 + 改写耗时，不含读取、不含上游 |
 
 `inject` 的取值：
 
@@ -152,7 +153,18 @@ limits:
 
 容器里配置文件是打进镜像的，想临时开启不必重建镜像：`KEYCORDON_LOG_LEVEL=debug`、`KEYCORDON_LOG_USAGE=1`（环境变量优先于配置文件）。
 
-三个数字来自各家的不同字段：OpenAI Chat 的 `prompt_tokens` / `prompt_tokens_details.cached_tokens`、Responses 的 `input_tokens` / `input_tokens_details.cached_tokens`、Anthropic 的 `input_tokens` / `cache_read_input_tokens`、Gemini 的 `usageMetadata.promptTokenCount` / `cachedContentTokenCount`。流式响应从各个 SSE 事件里累加，所以 `cached_tokens` 为 0 就意味着这一轮缓存没命中。只读不写，响应字节不受影响。
+这三个数字在不同厂商那里的口径不一样，keycordon 先统一再计算命中率：
+
+| 厂商 | `input_tokens` 取自 | `cached_tokens` 取自 |
+|---|---|---|
+| OpenAI Chat | `prompt_tokens`（含缓存） | `prompt_tokens_details.cached_tokens` |
+| OpenAI Responses | `input_tokens`（含缓存） | `input_tokens_details.cached_tokens` |
+| Anthropic | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` | `cache_read_input_tokens` |
+| Gemini | `usageMetadata.promptTokenCount` | `usageMetadata.cachedContentTokenCount` |
+
+Anthropic 的 `input_tokens` 只算**未命中缓存**的那部分，一个缓存很好的 Claude 请求会是 `input_tokens=18` 对 `cache_read_input_tokens=48000`，直接相除会得出 266666%。所以它先被加总成和 OpenAI 一样的口径，`cache_hit` 才意义一致。发生过缓存写入时会多一个 `cache_write_tokens` 字段。
+
+流式响应从各个 SSE 事件里累加，所以 `cached_tokens` 为 0 就意味着这一轮缓存没命中。只读不写，响应字节不受影响。
 
 ## 实测兼容性
 

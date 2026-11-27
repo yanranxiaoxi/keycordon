@@ -322,6 +322,38 @@ func TestCountsRecordsScanShape(t *testing.T) {
 	}
 }
 
+// TestShortUnitsAreNotScanned keeps the cheap path honest: a string shorter
+// than the minimum span length can never hold a value to replace, and it is
+// also below the memo's floor so it would be re-scanned on every turn.
+func TestShortUnitsAreNotScanned(t *testing.T) {
+	a := adapter(t, "/v1/chat/completions")
+	// "user", "system" and "auto" are real roles, and "stop" is a real field
+	// value: all shorter than the eight bytes a secret needs.
+	raw := []byte(`{"messages":[{"role":"user","content":"hi"}],"stop":"stop"}`)
+	// Injection off: this test is about the units, not the notice.
+	res, err := newRW(false).JSON(context.Background(), a, raw, caller())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Units != 0 {
+		t.Errorf("scanned %d units, all of them too short to hold a secret", res.Units)
+	}
+	if string(raw) != string(res.Body) {
+		t.Errorf("body changed: %s", res.Body)
+	}
+
+	// Exactly at the floor is still scanned: the check is `shorter than`, not
+	// `shorter or equal`. Dropping that byte would be a silent miss.
+	long := []byte(`{"messages":[{"role":"user","content":"eightbyt"}]}`)
+	res, err = newRW(false).JSON(context.Background(), a, long, caller())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Units != 1 {
+		t.Errorf("units %d, want 1 for an 8-byte string", res.Units)
+	}
+}
+
 func TestPromptOnlyFields(t *testing.T) {
 	a := adapter(t, "/v1/images/generations")
 	raw := []byte(`{"model":"gpt-image-1","prompt":"a poster saying ` + ghToken + `","user":"` + ghToken + `"}`)

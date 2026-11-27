@@ -256,6 +256,7 @@ response:
 3. 字符串值如果以 `{` 或 `[` 开头且能解析为 JSON（典型例子是 `tool_calls[].function.arguments`），递归进入内层，扫描完再序列化回字符串。
 4. 递归深度上限 `max_json_depth`（默认 128），超限返回 400。privacy-gateway 在 2000 层嵌套时直接 `RecursionError`。
 5. 对象的 key 不扫描、不改写。
+6. 短于 `detector.min_value_length`（默认 8 字节）的字符串直接跳过。一个 span 不可能比这个长度更短，所以这类字符串永远不会产生替换结果；它们又低于 sent memo 的门槛（`MinSentText = 8`），**无法被冻结**，于是每一轮都会重新送去检测。实测收益取决于请求形状：普通对话里 `role` 已经在冻结字段表里，省不到单元；带 `stop` / `user` / `metadata` 的请求从 4 个单元降到 1 个，工具调用参数展开后的短字段也会被跳过。实现在 `Rewriter.minLen()` 与 `leafUnits`，由 `TestShortUnitsAreNotScanned` 守住。
 
 **公共冻结字段**（`_common.yaml`，各适配器继承；这些 key 下的值原样保留，不扫描）：
 
@@ -872,6 +873,7 @@ injected = caller.vault 非空（历史中曾有占位符） 或 本轮发生替
 - 单元测试：对 7.2 表里每一行写一个反例（先让它失败，再验证对策生效）。
 - 集成测试：用固定主密钥，模拟代理重启，断言重启前后同一密钥的占位符相同；且注入说明的决策不因重启而翻转（7.4）。
 - 日志：`log.usage: true` 时每个响应多打一行 `upstream usage`，把 `input_tokens` / `cached_tokens` / `output_tokens` 和命中率摊开（实现在 `internal/usage`，只读不写，不改响应字节）。默认关闭：平时是噪音，只有在查缓存时才开。上面那三个厂商字段都已解析，流式响应从 SSE 事件里累加。
+- 口径统一：`input_tokens` 对所有厂商都是**含缓存**的完整输入。OpenAI 与 Gemini 本来就是；Anthropic 的 `input_tokens` 只算未命中部分，所以在 `Merge` 里加上 `cache_read_input_tokens` 与 `cache_creation_input_tokens`。不这样做，一个缓存很好的 Claude 请求会算出 266666% 的命中率。
 - 实测：接入真实上游后查看厂商返回的缓存命中字段（Anthropic 的 `usage.cache_read_input_tokens`、OpenAI 的 `usage.prompt_tokens_details.cached_tokens`、Gemini 的 `usageMetadata.cachedContentTokenCount`），要求第 2 轮起命中率与「客户端直连」时基本一致。这一项是 M2 的验收项，不通过不能发布。
 
 ### 7.8 已发送文本的形态冻结（7.2 #7b 的实现）

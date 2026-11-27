@@ -338,6 +338,9 @@ go build ./... && go vet ./... && gofmt -l . && go test -race -count=1 ./...
 | TTFT 增量 ≤ 20 ms（典型请求）/ ≤ 100 ms（1M token、1000 密钥） | 见 design.md §11.2，改动热路径后重测 |
 | 请求之间不串行 | `TestConcurrentRequests`、`TestConcurrentStreams`（见 design.md §11.3） |
 | 重复的历史几乎不耗时 | `TestRepeatedHistoryIsCheap`（见 design.md §7.8） |
+| 不可能含密钥的短字符串不进检测 | `TestShortUnitsAreNotScanned`（见 design.md §4.2 第 6 条） |
+| 命中率口径跨厂商一致 | `TestHitRate`、`TestUsageLoggedSSE`（Anthropic 不会算出 266666%） |
+| `scan_ms` 不包含读取与解压 | `TestReadAndScanAreSeparate` |
 | 镜像可构建且能启动 | CI 的 `docker-build` 冒烟测试（`version` + `adapters`） |
 | 镜像以非 root 运行、密钥落在卷上 | 手工：`podman run --rm -v kcd:/var/lib/keycordon ...` 后检查 `/var/lib/keycordon/master.key` 属主 |
 

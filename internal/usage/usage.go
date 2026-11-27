@@ -12,22 +12,34 @@ import (
 )
 
 // Info is the token accounting of one response. Providers name the same
-// three numbers differently; Merge keeps whatever each one sent.
+// numbers differently; Merge folds each shape into this one.
+//
+// InputTokens is always the whole input, the cached part included:
+// OpenAI's prompt_tokens and Gemini's promptTokenCount already are, and
+// Anthropic's input_tokens is not, so it is summed up on the way in. That
+// keeps one definition across providers, which is what the hit rate needs.
 type Info struct {
 	InputTokens  int64
 	CachedTokens int64
 	OutputTokens int64
-	Model        string
+	// CacheWriteTokens is the input that was written to the cache by this
+	// request. Only Anthropic reports it.
+	CacheWriteTokens int64
+	Model            string
 }
 
 // Empty reports that nothing was found.
 func (i Info) Empty() bool {
-	return i.InputTokens == 0 && i.CachedTokens == 0 && i.OutputTokens == 0 && i.Model == ""
+	return i.InputTokens == 0 && i.CachedTokens == 0 && i.OutputTokens == 0 &&
+		i.CacheWriteTokens == 0 && i.Model == ""
 }
 
 // HitRate returns the share of the input that came from the prompt cache.
-// Providers disagree on whether the cached count is part of the input
-// count, so it is also reported next to the raw numbers.
+//
+// Dividing by whatever the provider calls "input" is wrong for Anthropic,
+// whose input_tokens excludes the cached part: a well-cached Claude request
+// has input_tokens=18 against cache_read_input_tokens=48000, which reads as
+// 266666%. Merge therefore normalises Anthropic to the OpenAI shape first.
 func (i Info) HitRate() float64 {
 	if i.InputTokens <= 0 {
 		return 0
@@ -72,7 +84,20 @@ func (i *Info) Merge(w wire) {
 		i.Model = w.Model
 	}
 	if u := w.Usage; u != nil {
-		set(&i.InputTokens, u.PromptTokens, u.InputTokens)
+		// Anthropic's three numbers are disjoint parts of one input; OpenAI's
+		// and Gemini's are one total plus a detail of it. Adding them up only
+		// for Anthropic keeps "InputTokens is the whole input" true for every
+		// provider, which is what the hit rate divides by.
+		if u.CacheReadInputTokens > 0 || u.CacheCreationInputTokens > 0 {
+			var total int64
+			for _, v := range []int64{u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens} {
+				total += v
+			}
+			set(&i.InputTokens, total)
+			set(&i.CacheWriteTokens, u.CacheCreationInputTokens)
+		} else {
+			set(&i.InputTokens, u.PromptTokens, u.InputTokens)
+		}
 		set(&i.OutputTokens, u.CompletionTokens, u.OutputTokens)
 		if u.PromptDetail != nil {
 			set(&i.CachedTokens, u.PromptDetail.CachedTokens)
